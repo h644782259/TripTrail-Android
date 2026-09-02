@@ -9,6 +9,10 @@ import com.personal.triptrail.data.StoryEntry
 import java.net.URLEncoder
 
 object ExternalApps {
+    fun openAmapTarget(context: Context, target: JourneyLocationTarget): Boolean {
+        val keyword = URLEncoder.encode(listOf(target.displayName, target.address).filter { it.isNotBlank() }.joinToString(" "), "UTF-8")
+        return launch(context, Intent(Intent.ACTION_VIEW, Uri.parse("androidamap://keywordNavi?sourceApplication=旅迹&keyword=$keyword&style=2")).setPackage("com.autonavi.minimap"))
+    }
     fun openAmap(context: Context, item: ItineraryItem): Boolean {
         val target = item.primaryNavigationTarget ?: return false
         val encodedName = URLEncoder.encode(target.displayName, "UTF-8")

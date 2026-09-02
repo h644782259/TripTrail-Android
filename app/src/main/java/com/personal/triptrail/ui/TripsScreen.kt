@@ -7,8 +7,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,9 +30,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -44,13 +51,13 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.personal.triptrail.R
 import com.personal.triptrail.data.*
 import com.personal.triptrail.util.ExternalApps
-import com.personal.triptrail.util.TripFileService
 import com.personal.triptrail.util.ZhipuRecognitionService
+import com.personal.triptrail.util.SecureRecognitionSettings
 import kotlinx.coroutines.launch
 import java.io.File
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import kotlin.math.abs
 
 private enum class TripHomeSection(val label: String) { CURRENT("进行中/待出发"), COMPLETED("已结束") }
 
@@ -60,16 +67,13 @@ fun TripsScreen(repository: TripRepository, trips: List<Trip>, modifier: Modifie
     var creating by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Trip?>(null) }
     var deleting by remember { mutableStateOf<Trip?>(null) }
+    var sharing by remember { mutableStateOf<Trip?>(null) }
+    var routeTrip by remember { mutableStateOf<Trip?>(null) }
+    var routeTargets by remember { mutableStateOf<List<JourneyLocationTarget>>(emptyList()) }
+    var smartTrip by remember { mutableStateOf<Trip?>(null) }
+    var openTarget by remember { mutableStateOf<JourneyLocationTarget?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
-    var exportText by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
-    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.triptrail.journey")) { uri ->
-        if (uri != null) runCatching {
-            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText.orEmpty()) }
-                ?: error("无法创建分享文件")
-        }.onSuccess { message = "分享文件已导出。" }.onFailure { message = "导出失败：${it.localizedMessage}" }
-        exportText = null
-    }
     val current = remember(trips) { trips.timelineSorted().filter { it.phase() != TripPhase.HISTORY } }
     val completed = remember(trips) { trips.timelineSorted().filter { it.phase() == TripPhase.HISTORY } }
     val displayed = if (section == TripHomeSection.CURRENT) current else completed
@@ -88,7 +92,7 @@ fun TripsScreen(repository: TripRepository, trips: List<Trip>, modifier: Modifie
             if (trips.isEmpty()) {
                 item { JourneyEmptyHero() }
                 item {
-                    Column(Modifier.fillParentMaxHeight(.55f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Column(Modifier.fillMaxWidth().fillParentMaxHeight(.55f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                         Icon(Icons.Default.Luggage, null, tint = TripLakeText, modifier = Modifier.size(52.dp))
                         Spacer(Modifier.height(12.dp)); Text("下一站，去哪里？", style = MaterialTheme.typography.headlineSmall)
                         Spacer(Modifier.height(6.dp)); Text("新建旅行，按天安排地点、交通和照片。", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -99,7 +103,7 @@ fun TripsScreen(repository: TripRepository, trips: List<Trip>, modifier: Modifie
                 item { TripSegmentedControl(section, current.size, completed.size) { section = it } }
                 if (displayed.isEmpty()) {
                     item {
-                        Column(Modifier.fillParentMaxHeight(.55f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Column(Modifier.fillMaxWidth().fillParentMaxHeight(.55f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             Icon(if (section == TripHomeSection.CURRENT) Icons.Default.EventAvailable else Icons.Default.History, null, tint = TripLakeText, modifier = Modifier.size(46.dp))
                             Spacer(Modifier.height(12.dp)); Text(if (section == TripHomeSection.CURRENT) "暂无进行中或待出发的旅程" else "还没有已结束的旅程", style = MaterialTheme.typography.titleLarge)
                         }
@@ -112,15 +116,9 @@ fun TripsScreen(repository: TripRepository, trips: List<Trip>, modifier: Modifie
                             onOpen = { onOpen(trip.id) },
                             onEdit = { editing = trip },
                             onArchive = { repository.archiveTrip(trip.id); message = "已整理成足迹。" },
-                            onShare = {
-                                exportText = TripFileService.shareTrip(trip)
-                                exporter.launch("${trip.title}.triptrail")
-                            },
-                            onSmartImport = { onOpen(trip.id) },
-                            onRoute = {
-                                val targets = trip.days.sortedBy { it.sortOrder }.flatMap { day -> day.items.sortedBy { it.sortOrder } }.flatMap { it.locationTargets }
-                                if (!ExternalApps.openAmapRoute(context, targets)) message = "至少需要两个已填写地点，并安装高德地图，才能规划全旅程路线。"
-                            },
+                            onShare = { sharing = trip },
+                            onSmartImport = { smartTrip = trip },
+                            onRoute = { routeTrip = trip },
                             onDelete = { deleting = trip },
                         )
                     }
@@ -135,6 +133,19 @@ fun TripsScreen(repository: TripRepository, trips: List<Trip>, modifier: Modifie
         repository.updateTrip(trip.copy(title = title, destination = destination, startDate = start, endDate = end, note = note)); editing = null
     } }
     deleting?.let { trip -> ConfirmDeleteDialog("删除旅程？", "“${trip.title}”以及其中的日期、安排和媒体引用都会删除。", { deleting = null }) { repository.deleteTrip(trip.id); deleting = null } }
+    sharing?.let { trip -> TripShareDialog(trip, onDismiss = { sharing = null }) }
+    routeTrip?.let { trip ->
+        RoutePointChooser(routeTargets.ifEmpty { trip.days.sortedBy { it.sortOrder }.flatMap { it.items.sortedBy { item -> item.sortOrder } }.flatMap { it.locationTargets } }, { routeTrip = null; routeTargets = emptyList() }) { selected ->
+            routeTrip = null
+            if (!ExternalApps.openAmapRoute(context, selected)) message = "至少需要两个已填写地点，并安装高德地图，才能规划路线。"
+        }
+    }
+    smartTrip?.let { trip -> SmartImportChoiceDialog({ smartTrip = null }) { _ -> smartTrip = null; onOpen(trip.id) } }
+    openTarget?.let { target -> OpenPlaceChooser(target.displayName, target.address, { openTarget = null }) { platform ->
+        if (platform == "高德地图") ExternalApps.openAmapTarget(context, target)
+        else ExternalApps.openDiscovery(context, platform, target.displayName, target.address)
+        openTarget = null
+    } }
     message?.let { AlertDialog(onDismissRequest = { message = null }, title = { Text("提示") }, text = { Text(it) }, confirmButton = { TextButton(onClick = { message = null }) { Text("好") } }) }
 }
 
@@ -177,7 +188,7 @@ private fun TripCardContainer(
         if (featured) FeaturedTripHero(trip, onOpen) else StandardTripCard(trip, onOpen)
         Box(Modifier.align(Alignment.TopEnd).padding(9.dp)) {
             IconButton(onClick = { menu = true }, modifier = Modifier.background(TripSurface.copy(alpha = .72f), CircleShape)) { Icon(Icons.Default.MoreHoriz, "更多操作", tint = TripInk.copy(alpha = .72f)) }
-            DropdownMenu(menu, { menu = false }) {
+            TripDropdownMenu(menu, { menu = false }) {
                 DropdownMenuItem({ Text("编辑旅程") }, { menu = false; onEdit() }, leadingIcon = { Icon(Icons.Default.Edit, null) })
                 DropdownMenuItem({ Text("整理成足迹") }, { menu = false; onArchive() }, leadingIcon = { Icon(Icons.Default.MenuBook, null) })
                 DropdownMenuItem({ Text("分享旅程") }, { menu = false; onShare() }, leadingIcon = { Icon(Icons.Default.Share, null) })
@@ -217,18 +228,17 @@ private fun FeaturedTripHero(trip: Trip, onOpen: () -> Unit) {
                             }
                         }
                         Text(trip.title, style = MaterialTheme.typography.headlineLarge, color = TripInk, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        if (trip.destination.isNotBlank()) IconText(Icons.Default.PinDrop, trip.destination, TripInk.copy(alpha = .68f))
-                        IconText(Icons.Default.CalendarMonth, "${trip.startDate.chineseDateText()} — ${trip.endDate.chineseDateText()}", TripInk.copy(alpha = .68f))
+                        if (trip.destination.isNotBlank()) IconText(Icons.Default.PinDrop, trip.destination, TripInk.copy(alpha = .78f))
+                        IconText(Icons.Default.CalendarMonth, "${trip.startDate.chineseDateText()} — ${trip.endDate.chineseDateText()}", TripInk.copy(alpha = .78f))
                     }
-                    Box(Modifier.size(82.dp).padding(top = 38.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxSize(), color = TripLake, trackColor = TripLake.copy(alpha = .22f), strokeWidth = 7.dp)
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (phase == TripPhase.UPCOMING) "还有" else "第 ${currentDay} 天", style = MaterialTheme.typography.labelSmall, color = TripInk.copy(alpha = .64f))
-                            Text(if (phase == TripPhase.UPCOMING) "${daysUntil(trip.startDate)} 天" else "$currentDay/$totalDays", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TripInk)
-                        }
-                    }
+                    TripProgressRing(
+                        fraction = fraction,
+                        caption = if (phase == TripPhase.UPCOMING) "还有" else "第 ${currentDay} 天",
+                        value = if (phase == TripPhase.UPCOMING) "${daysUntil(trip.startDate)} 天" else "$currentDay/$totalDays",
+                        modifier = Modifier.padding(top = 38.dp),
+                    )
                 }
-                if (trip.note.isNotBlank()) Text(trip.note, style = MaterialTheme.typography.bodyMedium, color = TripInk.copy(alpha = .72f), maxLines = 2)
+                if (trip.note.isNotBlank()) Text(trip.note, style = MaterialTheme.typography.bodyMedium, color = TripInk.copy(alpha = .84f), maxLines = 2)
                 if (phase == TripPhase.CURRENT) {
                     HorizontalDivider(color = TripLake.copy(alpha = .26f)); Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.ListAlt, null, tint = TripInk, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(7.dp)); Text("今日安排", fontWeight = FontWeight.Bold, color = TripInk); Spacer(Modifier.weight(1f)); Text(if (todayItems.isEmpty()) "暂无安排" else "$doneToday/${todayItems.size} 已完成", style = MaterialTheme.typography.labelMedium, color = TripLakeText)
@@ -243,7 +253,46 @@ private fun FeaturedTripHero(trip: Trip, onOpen: () -> Unit) {
 
 @Composable
 private fun ScheduleLine(label: String, item: ItineraryItem?) {
-    Row { Text("$label：", style = MaterialTheme.typography.labelMedium, color = TripInk.copy(alpha = .82f)); Text(item?.title?.ifBlank { "未命名安排" } ?: "暂无", style = MaterialTheme.typography.labelMedium, color = TripInk.copy(alpha = if (item == null) .62f else 1f), maxLines = 1) }
+    Row { Text("$label：", style = MaterialTheme.typography.labelMedium, color = TripInk.copy(alpha = .9f)); Text(item?.title?.ifBlank { "未命名安排" } ?: "暂无", style = MaterialTheme.typography.labelMedium, color = TripInk.copy(alpha = if (item == null) .74f else 1f), maxLines = 1) }
+}
+
+@Composable
+private fun TripProgressRing(fraction: Float, caption: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.size(80.dp),
+        shape = CircleShape,
+        color = TripSurface.copy(alpha = .88f),
+        shadowElevation = 2.dp,
+        tonalElevation = 0.dp,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val strokeWidth = 7.dp.toPx()
+                val arcSize = Size(size.width - strokeWidth, size.height - strokeWidth)
+                val arcOrigin = Offset(strokeWidth / 2f, strokeWidth / 2f)
+                drawCircle(
+                    color = TripLake.copy(alpha = .24f),
+                    radius = (size.minDimension - strokeWidth) / 2f,
+                    style = Stroke(width = strokeWidth),
+                )
+                if (fraction > 0f) {
+                    drawArc(
+                        color = TripLake,
+                        startAngle = -90f,
+                        sweepAngle = 360f * fraction.coerceIn(0f, 1f),
+                        useCenter = false,
+                        topLeft = arcOrigin,
+                        size = arcSize,
+                        style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                    )
+                }
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy((-1).dp)) {
+                Text(caption, style = MaterialTheme.typography.labelSmall, color = TripInk.copy(alpha = .74f), fontWeight = FontWeight.Medium)
+                Text(value, fontSize = 19.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold, color = TripInk, maxLines = 1)
+            }
+        }
+    }
 }
 
 @Composable
@@ -288,40 +337,40 @@ private fun daysUntil(date: Long): Int = ChronoUnit.DAYS.between(System.currentT
 private fun TripEditorDialog(original: Trip?, onDismiss: () -> Unit, save: (String, String, Long, Long, String) -> Unit) {
     var title by remember(original?.id) { mutableStateOf(original?.title.orEmpty()) }
     var destination by remember(original?.id) { mutableStateOf(original?.destination.orEmpty()) }
-    var start by remember(original?.id) { mutableStateOf(original?.startDate?.dateText() ?: System.currentTimeMillis().dateText()) }
-    var end by remember(original?.id) { mutableStateOf(original?.endDate?.dateText() ?: System.currentTimeMillis().dateText()) }
+    var start by remember(original?.id) { mutableLongStateOf(original?.startDate ?: System.currentTimeMillis().startOfDay()) }
+    var end by remember(original?.id) { mutableLongStateOf(original?.endDate ?: System.currentTimeMillis().startOfDay()) }
     var note by remember(original?.id) { mutableStateOf(original?.note.orEmpty()) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (original == null) "新建旅程" else "编辑旅程") },
+    AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(28.dp), containerColor = TripSurface, title = { Text(if (original == null) "新建旅程" else "编辑旅程") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(title, { title = it }, label = { Text("旅程名称") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(destination, { destination = it }, label = { Text("目的地") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(start, { start = it }, label = { Text("开始日期（yyyy-MM-dd）") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(end, { end = it }, label = { Text("结束日期（yyyy-MM-dd）") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(note, { note = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            TripFormField(title, { title = it }, "旅程名称")
+            TripFormField(destination, { destination = it }, "目的地")
+            TripDateRangeField(start, end) { selectedStart, selectedEnd -> start = selectedStart; end = maxOf(selectedEnd, selectedStart) }
+            TripFormField(note, { note = it }, "备注", minLines = 3, singleLine = false)
         } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        confirmButton = { Button(onClick = { save(title.trim(), destination.trim(), parseDate(start)!!, parseDate(end)!!, note.trim()) }, enabled = title.isNotBlank() && destination.isNotBlank() && parseDate(start) != null && parseDate(end) != null) { Text("保存") } })
+        confirmButton = { Button(onClick = { save(title.trim(), destination.trim(), start, end, note.trim()) }, enabled = title.isNotBlank() && destination.isNotBlank()) { Text("保存") } })
 }
 
 @Composable
 private fun DayEditorDialog(day: TripDay, onDismiss: () -> Unit, save: (TripDay) -> Unit) {
     var title by remember(day.id) { mutableStateOf(day.title) }
-    var date by remember(day.id) { mutableStateOf(day.date.dateText()) }
+    var date by remember(day.id) { mutableLongStateOf(day.date) }
     var note by remember(day.id) { mutableStateOf(day.note) }
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = TripSurface,
         title = { Text("编辑当天") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(title, { title = it }, label = { Text("当天标题") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(date, { date = it }, label = { Text("日期（yyyy-MM-dd）") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(note, { note = it }, label = { Text("当天摘要") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+                TripFormField(title, { title = it }, "当天标题")
+                TripDateField(date, "日期", { date = it })
+                TripFormField(note, { note = it }, "当天摘要", minLines = 3, singleLine = false)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         confirmButton = {
             Button(
-                onClick = { save(day.copy(title = title.trim(), date = parseDate(date)!!, note = note.trim())) },
-                enabled = parseDate(date) != null,
+                onClick = { save(day.copy(title = title.trim(), date = date, note = note.trim())) },
             ) { Text("保存") }
         },
     )
@@ -344,20 +393,25 @@ fun TripDetailScreen(repository: TripRepository, tripId: String, modifier: Modif
     var editingDay by remember { mutableStateOf<TripDay?>(null) }
     var deletingDay by remember { mutableStateOf<TripDay?>(null) }
     var dayMenu by remember { mutableStateOf(false) }
+    var inputMenu by remember { mutableStateOf(false) }
+    var sharingDay by remember { mutableStateOf<TripDay?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
-    var exportText by remember { mutableStateOf<String?>(null) }
+    var routeTrip by remember { mutableStateOf<Trip?>(null) }
+    var routeTargets by remember { mutableStateOf<List<JourneyLocationTarget>>(emptyList()) }
+    var openTarget by remember { mutableStateOf<JourneyLocationTarget?>(null) }
     val context = LocalContext.current
     val recognitionScope = rememberCoroutineScope()
-    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.triptrail.journey")) { uri ->
-        if (uri != null) runCatching {
-            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText.orEmpty()) }
-                ?: error("无法创建分享文件")
-        }.onSuccess { message = "分享文件已导出。" }.onFailure { message = "导出失败：${it.localizedMessage}" }
-        exportText = null
-    }
-    val screenshotPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val screenshotPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val day = imageImportDay; imageImportDay = null
         if (uri != null && day != null) {
+            if (SecureRecognitionSettings(context).provider == SecureRecognitionSettings.Provider.DEEPSEEK) {
+                recognitionScope.launch {
+                    val recognized = ZhipuRecognitionService.recognizeSingleItemImage(context, uri, day.date, repository.suggestedStart(day))
+                    editing = day to recognized.item
+                    recognized.fallbackMessage?.let { message = it }
+                }
+                return@rememberLauncherForActivityResult
+            }
             val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
             runCatching { InputImage.fromFilePath(context, uri) }.onSuccess { image ->
                 recognizer.process(image).addOnSuccessListener { result ->
@@ -377,23 +431,26 @@ fun TripDetailScreen(repository: TripRepository, tripId: String, modifier: Modif
                 TripRoundAction(Icons.Default.ArrowBack, "返回", onBack); Text(trip.title, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Box {
                     TripRoundAction(Icons.Default.MoreHoriz, "当天更多操作") { dayMenu = true }
-                    DropdownMenu(dayMenu, { dayMenu = false }) {
+                    TripDropdownMenu(dayMenu, { dayMenu = false }) {
                         selectedDay?.let { day ->
                             DropdownMenuItem({ Text("编辑当天") }, { dayMenu = false; editingDay = day }, leadingIcon = { Icon(Icons.Default.Edit, null) })
-                            DropdownMenuItem({ Text("文字录入") }, { dayMenu = false; textImportDay = day }, leadingIcon = { Icon(Icons.Default.TextFields, null) })
-                            DropdownMenuItem({ Text("图片录入") }, { dayMenu = false; imageImportDay = day; screenshotPicker.launch("image/*") }, leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) })
+                            DropdownMenuItem({ Text("录入当天") }, { dayMenu = false; inputMenu = true }, leadingIcon = { Icon(Icons.Default.AddBox, null) }, trailingIcon = { Icon(Icons.Default.ChevronRight, null) })
                             DropdownMenuItem({ Text("分享当天") }, {
                                 dayMenu = false
-                                exportText = TripFileService.shareTripDay(trip, day)
-                                exporter.launch("${trip.title}-${day.title.ifBlank { day.date.dateText() }}.triptrail")
+                                sharingDay = day
                             }, leadingIcon = { Icon(Icons.Default.Share, null) })
                             DropdownMenuItem({ Text("规划当天路线") }, {
                                 dayMenu = false
-                                val targets = day.items.sortedBy { it.sortOrder }.flatMap { it.locationTargets }
-                                if (!ExternalApps.openAmapRoute(context, targets)) message = "至少需要两个已填写地点，并安装高德地图，才能规划当天路线。"
+                                routeTargets = day.items.sortedBy { it.sortOrder }.flatMap { it.locationTargets }; routeTrip = trip
                             }, leadingIcon = { Icon(Icons.Default.Route, null) })
                             HorizontalDivider()
                             DropdownMenuItem({ Text("删除当天", color = MaterialTheme.colorScheme.error) }, { dayMenu = false; deletingDay = day }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
+                        }
+                    }
+                    TripDropdownMenu(inputMenu, { inputMenu = false }) {
+                        selectedDay?.let { day ->
+                            DropdownMenuItem({ Text("文字录入") }, { inputMenu = false; textImportDay = day }, leadingIcon = { Icon(Icons.Default.TextFields, null) })
+                            DropdownMenuItem({ Text("图片录入") }, { inputMenu = false; imageImportDay = day; screenshotPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) })
                         }
                     }
                 }
@@ -401,8 +458,22 @@ fun TripDetailScreen(repository: TripRepository, tripId: String, modifier: Modif
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 days.forEachIndexed { index, day ->
                     val active = day.id == selectedDay?.id
+                    var dragX by remember(day.id) { mutableFloatStateOf(0f) }
                     Surface(onClick = { selectedDayId = day.id }, shape = RoundedCornerShape(24.dp), color = if (active) TripLake else TripSurface, border = if (active) null else androidx.compose.foundation.BorderStroke(.8.dp, TripLake.copy(alpha = .2f))) {
-                        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text("第 ${index + 1} 天", style = MaterialTheme.typography.labelSmall, color = if (active) Color.White else TripInk); Text(day.date.chineseDateText(), style = MaterialTheme.typography.labelMedium, color = if (active) Color.White else TripInk) }
+                        Row(
+                            Modifier.pointerInput(day.id, index, days.size) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { dragX = 0f }, onDragEnd = { dragX = 0f }, onDragCancel = { dragX = 0f },
+                                ) { change, amount ->
+                                    change.consume(); dragX += amount.x
+                                    if (abs(dragX) > 56f) { repository.moveDay(trip.id, day.id, if (dragX > 0) 1 else -1); dragX = 0f }
+                                }
+                            }.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Spacer(Modifier.width(4.dp))
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("第 ${index + 1} 天", style = MaterialTheme.typography.labelSmall, color = if (active) Color.White else TripInk); Text(day.date.chineseDateText(), style = MaterialTheme.typography.labelMedium, color = if (active) Color.White else TripInk) }
+                        }
                     }
                 }
                 TripRoundAction(Icons.Default.Add, "添加一天") { repository.addDay(trip.id)?.let { selectedDayId = it.id } }
@@ -411,16 +482,16 @@ fun TripDetailScreen(repository: TripRepository, tripId: String, modifier: Modif
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 10.dp, 16.dp, 112.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     item { Text(day.title.ifBlank { "第 ${(days.indexOf(day) + 1)} 天" }, style = MaterialTheme.typography.headlineSmall, color = TripInk) }
                     items(day.items.sortedBy { it.sortOrder }, key = { it.id }) { item ->
-                        ItineraryItemCard(item, { editing = day to item }, { ExternalApps.openAmap(context, item) }, { repository.moveItem(trip.id, day.id, item.id, -1) }, { repository.moveItem(trip.id, day.id, item.id, 1) }, { deleting = day to item })
+                        ItineraryItemCard(item, { editing = day to item }, { openTarget = it }, { repository.moveItem(trip.id, day.id, item.id, -1) }, { repository.moveItem(trip.id, day.id, item.id, 1) }, { deleting = day to item })
                     }
                     item {
                         Box {
                             TextButton(onClick = { addMenu = true }) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("添加安排", fontWeight = FontWeight.Bold) }
-                            DropdownMenu(addMenu, { addMenu = false }) {
+                            TripDropdownMenu(addMenu, { addMenu = false }) {
                                 DropdownMenuItem({ Text("手动") }, { addMenu = false; editing = day to ItineraryItem(startTime = repository.suggestedStart(day), endTime = repository.suggestedStart(day) + 3_600_000) }, leadingIcon = { Icon(Icons.Default.Edit, null) })
                                 DropdownMenuItem({ Text("从收藏导入") }, { addMenu = false; favoriteImportDay = day }, leadingIcon = { Icon(Icons.Default.FavoriteBorder, null) })
                                 DropdownMenuItem({ Text("文字录入") }, { addMenu = false; textImportDay = day }, leadingIcon = { Icon(Icons.Default.TextFields, null) })
-                                DropdownMenuItem({ Text("图片录入") }, { addMenu = false; imageImportDay = day; screenshotPicker.launch("image/*") }, leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) })
+                                DropdownMenuItem({ Text("图片录入") }, { addMenu = false; imageImportDay = day; screenshotPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) })
                             }
                         }
                     }
@@ -441,13 +512,15 @@ fun TripDetailScreen(repository: TripRepository, tripId: String, modifier: Modif
         }
     } }
     favoriteImportDay?.let { day -> FavoriteImportDialog(data.favorites, { favoriteImportDay = null }) { ids -> repository.importFavorites(trip.id, day.id, ids); favoriteImportDay = null } }
+    sharingDay?.let { day -> TripShareDialog(trip, initialDayId = day.id, onDismiss = { sharingDay = null }) }
     message?.let { AlertDialog(onDismissRequest = { message = null }, title = { Text("提示") }, text = { Text(it) }, confirmButton = { TextButton(onClick = { message = null }) { Text("好") } }) }
 }
 
 @Composable
-private fun ItineraryItemCard(item: ItineraryItem, onEdit: () -> Unit, onNavigate: () -> Unit, moveUp: () -> Unit, moveDown: () -> Unit, onDelete: () -> Unit) {
+private fun ItineraryItemCard(item: ItineraryItem, onEdit: () -> Unit, onNavigate: (JourneyLocationTarget) -> Unit, moveUp: () -> Unit, moveDown: () -> Unit, onDelete: () -> Unit) {
     val statusColor = when (item.executionStatus) { ItineraryExecutionStatus.NOT_STARTED -> Color(0xFF8F662E); ItineraryExecutionStatus.IN_PROGRESS -> TripLake; ItineraryExecutionStatus.COMPLETED -> TripSage }
     var menu by remember { mutableStateOf(false) }
+    var dragY by remember(item.id) { mutableFloatStateOf(0f) }
     Surface(
         modifier = Modifier.fillMaxWidth(), onClick = onEdit, shape = RoundedCornerShape(16.dp),
         color = if (item.executionStatus == ItineraryExecutionStatus.COMPLETED) Color(0xFFE7EEE8) else TripSurface,
@@ -458,24 +531,48 @@ private fun ItineraryItemCard(item: ItineraryItem, onEdit: () -> Unit, onNavigat
                 Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Icon(when (item.executionStatus) { ItineraryExecutionStatus.NOT_STARTED -> Icons.Default.Schedule; ItineraryExecutionStatus.IN_PROGRESS -> Icons.Default.PlayArrow; ItineraryExecutionStatus.COMPLETED -> Icons.Default.Check }, item.executionStatus.label, tint = if (item.executionStatus == ItineraryExecutionStatus.IN_PROGRESS) Color.White else statusColor, modifier = Modifier.size(20.dp)) }
             }
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(item.category.icon(), null, tint = if (item.executionStatus == ItineraryExecutionStatus.COMPLETED) Color.Gray else TripInk, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(7.dp)); Text(item.title.ifBlank { "未命名安排" }, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Surface(shape = RoundedCornerShape(18.dp), color = statusColor.copy(alpha = if (item.executionStatus == ItineraryExecutionStatus.IN_PROGRESS) 1f else .12f)) { Text("${item.startTime.timeText()}–${item.endTime.timeText()}", Modifier.padding(horizontal = 10.dp, vertical = 7.dp), style = MaterialTheme.typography.labelMedium, color = if (item.executionStatus == ItineraryExecutionStatus.IN_PROGRESS) Color.White else TripInk) }
                 }
-                item.locationTargets.forEach { target -> TextButton(onClick = onNavigate, contentPadding = PaddingValues(0.dp), modifier = Modifier.heightIn(min = 28.dp)) { Icon(if (target.role == JourneyLocationRole.ORIGIN) Icons.Default.MyLocation else Icons.Default.PinDrop, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("${target.role.label}：${target.displayName}", style = MaterialTheme.typography.bodyMedium) } }
+                item.locationTargets.forEach { target ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onNavigate(target) }.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(if (target.role == JourneyLocationRole.ORIGIN) Icons.Default.MyLocation else Icons.Default.PinDrop, null, Modifier.size(17.dp), tint = TripLakeText)
+                        Spacer(Modifier.width(6.dp))
+                        Text("${target.role.label}：${target.displayName}", style = MaterialTheme.typography.bodyMedium, color = TripLakeText)
+                    }
+                }
                 if (item.reservationInfo.isNotBlank()) IconText(Icons.Default.ConfirmationNumber, item.reservationInfo, MaterialTheme.colorScheme.onSurfaceVariant)
                 if (item.distanceText.isNotBlank() || item.cost > 0) IconText(Icons.Default.SwapHoriz, listOfNotNull(item.distanceText.takeIf { it.isNotBlank() }, item.cost.takeIf { it > 0 }?.let { "¥${String.format(Locale.CHINA, "%.2f", it)}" }).joinToString("   "), MaterialTheme.colorScheme.onSurfaceVariant)
                 if (item.note.isNotBlank()) Text(item.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (item.media.isNotEmpty()) MediaStrip(item.media)
             }
-            Box {
-                IconButton(onClick = { menu = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.MoreVert, "安排操作") }
-                DropdownMenu(menu, { menu = false }) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.DragIndicator,
+                    "长按拖动安排排序",
+                    modifier = Modifier.size(30.dp).pointerInput(item.id) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { dragY = 0f }, onDragEnd = { dragY = 0f }, onDragCancel = { dragY = 0f },
+                        ) { change, amount ->
+                            change.consume(); dragY += amount.y
+                            if (abs(dragY) > 50f) { if (dragY > 0) moveDown() else moveUp(); dragY = 0f }
+                        }
+                    },
+                    tint = TripLakeText.copy(alpha = .72f),
+                )
+                Box {
+                    IconButton(onClick = { menu = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.MoreVert, "安排操作") }
+                    TripDropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem({ Text("编辑") }, { menu = false; onEdit() }, leadingIcon = { Icon(Icons.Default.Edit, null) })
                     DropdownMenuItem({ Text("上移") }, { menu = false; moveUp() }, leadingIcon = { Icon(Icons.Default.KeyboardArrowUp, null) })
                     DropdownMenuItem({ Text("下移") }, { menu = false; moveDown() }, leadingIcon = { Icon(Icons.Default.KeyboardArrowDown, null) })
-                    DropdownMenuItem({ Text("删除") }, { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null) })
+                    DropdownMenuItem({ Text("删除", color = MaterialTheme.colorScheme.error) }, { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
+                    }
                 }
             }
         }
@@ -485,45 +582,33 @@ private fun ItineraryItemCard(item: ItineraryItem, onEdit: () -> Unit, onNavigat
 @Composable
 private fun ArrangementEditorDialog(repository: TripRepository, day: TripDay, original: ItineraryItem, onDismiss: () -> Unit, save: (ItineraryItem) -> Unit) {
     var title by remember(original.id) { mutableStateOf(original.title) }; var category by remember(original.id) { mutableStateOf(original.category) }
-    var start by remember(original.id) { mutableStateOf(original.startTime.timeText()) }; var end by remember(original.id) { mutableStateOf(original.endTime.timeText()) }
+    var start by remember(original.id) { mutableLongStateOf(original.startTime) }; var end by remember(original.id) { mutableLongStateOf(original.endTime) }
     var mode by remember(original.id) { mutableStateOf(original.locationMode) }
     var place by remember(original.id) { mutableStateOf(original.placeName.ifBlank { original.title.takeIf { original.address.isNotBlank() }.orEmpty() }) }; var placeAddress by remember(original.id) { mutableStateOf(original.placeAddress.ifBlank { original.address }) }
     var origin by remember(original.id) { mutableStateOf(original.originName) }; var originAddress by remember(original.id) { mutableStateOf(original.originAddress) }
     var destination by remember(original.id) { mutableStateOf(original.destinationName) }; var destinationAddress by remember(original.id) { mutableStateOf(original.destinationAddress) }
     var note by remember(original.id) { mutableStateOf(original.note) }; var reservation by remember(original.id) { mutableStateOf(original.reservationInfo) }; var distance by remember(original.id) { mutableStateOf(original.distanceText) }
-    var cost by remember(original.id) { mutableStateOf(if (original.cost == 0.0) "" else original.cost.toString()) }; var status by remember(original.id) { mutableStateOf(original.executionStatus) }; var media by remember(original.id) { mutableStateOf(original.media) }
+    var cost by remember(original.id) { mutableStateOf(if (original.cost == 0.0) "" else original.cost.toString()) }; var media by remember(original.id) { mutableStateOf(original.media) }
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(9)) { uris -> media = media + uris.take((9 - media.size).coerceAtLeast(0)).mapNotNull { uri -> runCatching { repository.importMedia(uri, if (context.contentResolver.getType(uri)?.startsWith("video") == true) MediaKind.VIDEO else MediaKind.IMAGE) }.getOrNull() } }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (original.title.isBlank()) "添加安排" else "编辑安排") },
+    AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(28.dp), containerColor = TripSurface, title = { Text(if (original.title.isBlank()) "添加安排" else "编辑安排") },
         text = { Column(Modifier.heightIn(max = 650.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(title, { title = it }, label = { Text("安排名称") }, modifier = Modifier.fillMaxWidth())
+            TripFormField(title, { title = it }, "安排名称")
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { PlaceCategory.entries.forEach { item -> FilterChip(category == item, { category = item }, { Text(item.label) }, leadingIcon = { Icon(item.icon(), null, Modifier.size(16.dp)) }) } }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = start,
-                    onValueChange = { start = it },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("开始") },
-                )
-                OutlinedTextField(
-                    value = end,
-                    onValueChange = { end = it },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("结束") },
-                )
+                    TripTimeRangeField(start, end) { selectedStart, selectedEnd -> start = selectedStart; end = selectedEnd }
             }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { ArrangementLocationMode.entries.forEachIndexed { index, item -> SegmentedButton(selected = mode == item, onClick = { mode = item }, shape = SegmentedButtonDefaults.itemShape(index, ArrangementLocationMode.entries.size)) { Text(item.label) } } }
             if (mode == ArrangementLocationMode.SINGLE) {
-                OutlinedTextField(place, { place = it }, label = { Text("地点名称") }, modifier = Modifier.fillMaxWidth()); OutlinedTextField(placeAddress, { placeAddress = it }, label = { Text("详细地址（选填）") }, modifier = Modifier.fillMaxWidth())
+                TripFormField(place, { place = it }, "地点名称"); TripFormField(placeAddress, { placeAddress = it }, "详细地址（选填）")
             } else {
-                OutlinedTextField(origin, { origin = it }, label = { Text("出发地名称") }, modifier = Modifier.fillMaxWidth()); OutlinedTextField(originAddress, { originAddress = it }, label = { Text("出发地详细地址（选填）") }, modifier = Modifier.fillMaxWidth()); OutlinedTextField(destination, { destination = it }, label = { Text("目的地名称") }, modifier = Modifier.fillMaxWidth()); OutlinedTextField(destinationAddress, { destinationAddress = it }, label = { Text("目的地详细地址（选填）") }, modifier = Modifier.fillMaxWidth())
+                TripFormField(origin, { origin = it }, "出发地名称"); TripFormField(originAddress, { originAddress = it }, "出发地详细地址（选填）"); TripFormField(destination, { destination = it }, "目的地名称"); TripFormField(destinationAddress, { destinationAddress = it }, "目的地详细地址（选填）")
             }
-            Text("执行状态", style = MaterialTheme.typography.labelLarge); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { ItineraryExecutionStatus.entries.forEach { item -> FilterChip(status == item, { status = item }, { Text(item.label) }) } }
-            OutlinedTextField(reservation, { reservation = it }, label = { Text("预约信息") }, modifier = Modifier.fillMaxWidth()); OutlinedTextField(distance, { distance = it }, label = { Text("交通/距离") }, modifier = Modifier.fillMaxWidth()); OutlinedTextField(cost, { cost = it }, label = { Text("花费") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)); OutlinedTextField(note, { note = it }, label = { Text("说明") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
+            TripFormField(reservation, { reservation = it }, "预约信息"); TripFormField(distance, { distance = it }, "交通/距离"); TripFormField(cost, { cost = it }, "花费", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)); TripFormField(note, { note = it }, "说明", minLines = 3, singleLine = false)
             if (media.isNotEmpty()) MediaStrip(media) { id -> media = media.filterNot { it.id == id } }
             OutlinedButton(onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(6.dp)); Text("添加照片或视频（${media.size}/9）") }
         } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        confirmButton = { Button(onClick = { val s = combineDateAndTime(day.date, start)!!; val e = combineDateAndTime(day.date, end)!!; save(original.copy(title = title.trim(), category = category, startTime = s, endTime = e, locationMode = mode, placeName = place.trim(), placeAddress = placeAddress.trim(), address = placeAddress.trim(), originName = origin.trim(), originAddress = originAddress.trim(), destinationName = destination.trim(), destinationAddress = destinationAddress.trim(), note = note.trim(), reservationInfo = reservation.trim(), distanceText = distance.trim(), cost = cost.toDoubleOrNull() ?: 0.0, executionStatus = status, isCompleted = status == ItineraryExecutionStatus.COMPLETED, media = media)) }, enabled = title.isNotBlank() && combineDateAndTime(day.date, start) != null && combineDateAndTime(day.date, end) != null) { Text("保存") } })
+        confirmButton = { Button(onClick = { save(original.copy(title = title.trim(), category = category, startTime = start, endTime = end, locationMode = mode, placeName = place.trim(), placeAddress = placeAddress.trim(), address = placeAddress.trim(), originName = origin.trim(), originAddress = originAddress.trim(), destinationName = destination.trim(), destinationAddress = destinationAddress.trim(), note = note.trim(), reservationInfo = reservation.trim(), distanceText = distance.trim(), cost = cost.toDoubleOrNull() ?: 0.0, isAutomaticCompletionOverridden = false, media = media).withAutomaticExecutionStatus()) }, enabled = title.isNotBlank() && end > start) { Text("保存") } })
 }
 
 @Composable
@@ -548,10 +633,42 @@ fun MediaThumbnail(media: MediaReference, modifier: Modifier = Modifier) {
 @Composable
 private fun TextImportDialog(onDismiss: () -> Unit, parse: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("文字录入") }, text = { OutlinedTextField(text, { text = it }, label = { Text("粘贴一段安排文字") }, minLines = 7, modifier = Modifier.fillMaxWidth()) }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }, confirmButton = { Button(onClick = { parse(text) }, enabled = text.isNotBlank()) { Text("识别并预览") } })
+    AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(28.dp), containerColor = TripSurface, title = { Text("文字录入") }, text = { TripFormField(text, { text = it }, "粘贴一段安排文字", minLines = 7, singleLine = false) }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }, confirmButton = { Button(onClick = { parse(text) }, enabled = text.isNotBlank()) { Text("识别并预览") } })
 }
 
 @Composable
 fun ConfirmDeleteDialog(title: String, message: String, onDismiss: () -> Unit, confirm: () -> Unit) {
     AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Text(message) }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }, confirmButton = { Button(onClick = confirm, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("确认删除") } })
+}
+
+@Composable
+private fun SmartImportChoiceDialog(onDismiss: () -> Unit, onChoose: (Boolean) -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("智能录入") }, text = { Text("请选择录入方式") },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }, confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onChoose(true) }) { Text("截图录入") }
+                TextButton(onClick = { onChoose(false) }) { Text("文字录入") }
+            }
+        })
+}
+
+@Composable
+private fun RoutePointChooser(targets: List<JourneyLocationTarget>, onDismiss: () -> Unit, onConfirm: (List<JourneyLocationTarget>) -> Unit) {
+    val distinct = targets.distinctBy { "${it.role}:${it.displayName}:${it.address}" }
+    var selected by remember(distinct) { mutableStateOf(distinct.toSet()) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("选择路线地点") }, text = {
+        Column(Modifier.heightIn(max = 520.dp)) {
+            Text("默认全选，可取消不需要规划的地点。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = { selected = distinct.toSet() }) { Text("全选") }
+                TextButton(onClick = { selected = emptySet() }) { Text("取消全选") }
+            }
+            LazyColumn { items(distinct) { target ->
+                Row(Modifier.fillMaxWidth().clickable { selected = if (target in selected) selected - target else selected + target }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(target in selected, { checked -> selected = if (checked) selected + target else selected - target })
+                    Column { Text(target.displayName, fontWeight = FontWeight.SemiBold); if (target.address.isNotBlank()) Text(target.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            } }
+        }
+    }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }, confirmButton = { Button(onClick = { onConfirm(distinct.filter { it in selected }) }, enabled = selected.size >= 2) { Text("规划 ${selected.size} 个地点") } })
 }

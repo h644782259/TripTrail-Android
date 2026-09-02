@@ -13,9 +13,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val repository = TripRepository(applicationContext)
-        val incoming = intent?.data?.let { uri -> runCatching { contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull() }
+        val incoming = intent?.data
         setContent {
-            TripTrailTheme { TripTrailApp(repository = repository, initialSharedFile = incoming) }
+            TripTrailTheme { TripTrailApp(repository = repository, initialSharedUri = incoming) }
         }
     }
 }

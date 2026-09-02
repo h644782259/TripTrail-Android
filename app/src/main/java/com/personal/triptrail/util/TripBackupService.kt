@@ -32,32 +32,53 @@ class TripBackupService(private val context: Context) {
         }
     }
 
-    fun read(input: InputStream): AppData {
+    fun read(input: InputStream): AppData = prepareRead(input).content
+
+    fun prepareRead(input: InputStream): PreparedImport<AppData> {
+        val buffered = if (input is java.io.BufferedInputStream) input else input.buffered()
+        if (PortablePackageCodec.hasMagic(buffered)) {
+            return PortablePackageService(context).prepareBackup(buffered)
+        }
+        buffered.mark(4)
+        val signature = ByteArray(4)
+        val signatureSize = buffered.read(signature)
+        buffered.reset()
+        if (signatureSize < 2 || signature[0] != 'P'.code.toByte() || signature[1] != 'K'.code.toByte()) {
+            return PreparedImport(TripFileService.importBackup(buffered.reader(Charsets.UTF_8).use { it.readText() }))
+        }
+
         val restoreDir = File(context.filesDir, "media").apply { mkdirs() }
         var data: AppData? = null
         val restored = mutableMapOf<String, String>()
-        ZipInputStream(input.buffered()).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                when {
-                    entry.name == "triptrail-data.json" -> {
-                        val buffer = ByteArrayOutputStream()
-                        zip.copyTo(buffer)
-                        data = json.decodeFromString(buffer.toString(Charsets.UTF_8.name()))
+        val restoredFiles = mutableListOf<File>()
+        return try {
+            ZipInputStream(buffered).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    when {
+                        entry.name == "triptrail-data.json" -> {
+                            val buffer = ByteArrayOutputStream()
+                            zip.copyTo(buffer)
+                            data = json.decodeFromString(buffer.toString(Charsets.UTF_8.name()))
+                        }
+                        entry.name.startsWith("media/") && !entry.isDirectory -> {
+                            val sourceName = entry.name.substringAfterLast('/')
+                            val id = sourceName.substringBeforeLast('.')
+                            val suffix = sourceName.substringAfterLast('.', "bin")
+                            val target = File(restoreDir, "$id-restored.$suffix")
+                            target.outputStream().use { zip.copyTo(it) }
+                            restoredFiles += target
+                            restored[id] = Uri.fromFile(target).toString()
+                        }
                     }
-                    entry.name.startsWith("media/") && !entry.isDirectory -> {
-                        val sourceName = entry.name.substringAfterLast('/')
-                        val id = sourceName.substringBeforeLast('.')
-                        val suffix = sourceName.substringAfterLast('.', "bin")
-                        val target = File(restoreDir, "$id-restored.$suffix")
-                        target.outputStream().use { zip.copyTo(it) }
-                        restored[id] = Uri.fromFile(target).toString()
-                    }
+                    zip.closeEntry()
                 }
-                zip.closeEntry()
             }
+            PreparedImport(requireNotNull(data) { "备份中缺少旅行数据" }.remapMedia(restored), restoredFiles)
+        } catch (error: Throwable) {
+            restoredFiles.forEach(File::delete)
+            throw error
         }
-        return requireNotNull(data) { "备份中缺少旅行数据" }.remapMedia(restored)
     }
 
     private fun openMedia(value: String): InputStream? {

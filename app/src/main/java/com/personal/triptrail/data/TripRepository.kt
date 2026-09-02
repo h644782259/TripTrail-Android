@@ -21,7 +21,7 @@ class TripRepository(private val context: Context) {
 
     @Synchronized
     private fun mutate(block: (AppData) -> AppData) {
-        val updated = block(_data.value)
+        val updated = block(_data.value).autoCompleteElapsed()
         _data.value = updated
         val temporary = File(dataFile.parentFile, "${dataFile.name}.tmp")
         temporary.writeText(json.encodeToString(updated))
@@ -36,6 +36,11 @@ class TripRepository(private val context: Context) {
     }.getOrElse { AppData() }
 
     fun replaceAll(data: AppData) = mutate { data }
+    fun refreshAutomaticStatuses() {
+        val current = _data.value
+        val refreshed = current.autoCompleteElapsed()
+        if (refreshed != current) mutate { refreshed }
+    }
     fun exportJson(): String = json.encodeToString(_data.value)
     fun decodeJson(value: String): AppData = json.decodeFromString(value)
 
@@ -124,7 +129,10 @@ class TripRepository(private val context: Context) {
         if (trip.id != tripId) trip else trip.copy(days = trip.days.map { day ->
             if (day.id != dayId) day else {
                 val exists = day.items.any { it.id == item.id }
-                val normalized = item.copy(sortOrder = if (exists) item.sortOrder else day.items.size)
+                val normalized = item.copy(
+                    sortOrder = if (exists) item.sortOrder else day.items.size,
+                    isAutomaticCompletionOverridden = false,
+                ).withAutomaticExecutionStatus()
                 day.copy(items = if (exists) day.items.map { if (it.id == item.id) normalized else it } else day.items + normalized)
             }
         })
@@ -328,12 +336,7 @@ class TripRepository(private val context: Context) {
         mutate { it.copy(trips = trips, favorites = favorites, stories = stories) }
     }
 
-    private fun AppData.autoCompleteElapsed(): AppData = copy(trips = trips.map { trip -> trip.copy(days = trip.days.map { day ->
-        day.copy(items = day.items.map { item ->
-            if (item.isAutomaticCompletionOverridden) return@map item
-            val now = System.currentTimeMillis()
-            val status = when { item.endTime <= now -> ItineraryExecutionStatus.COMPLETED; item.startTime <= now -> ItineraryExecutionStatus.IN_PROGRESS; else -> ItineraryExecutionStatus.NOT_STARTED }
-            item.copy(executionStatus = status, isCompleted = status == ItineraryExecutionStatus.COMPLETED, isAutomaticCompletionOverridden = false)
-        })
+    private fun AppData.autoCompleteElapsed(now: Long = System.currentTimeMillis()): AppData = copy(trips = trips.map { trip -> trip.copy(days = trip.days.map { day ->
+        day.copy(items = day.items.map { item -> item.withAutomaticExecutionStatus(now) })
     }) })
 }

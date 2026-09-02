@@ -5,6 +5,7 @@ package com.personal.triptrail.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,35 +18,59 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.personal.triptrail.data.AppData
+import com.personal.triptrail.data.TravelStory
+import com.personal.triptrail.data.Trip
 import com.personal.triptrail.data.TripRepository
+import com.personal.triptrail.R
+import com.personal.triptrail.util.PortablePackageService
+import com.personal.triptrail.util.PreparedImport
 import com.personal.triptrail.util.SecureRecognitionSettings
 import com.personal.triptrail.util.TripBackupService
-import com.personal.triptrail.util.TripFileService
+import com.personal.triptrail.util.backupMediaReferences
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen(repository: TripRepository, data: AppData, modifier: Modifier = Modifier, onOpenStatistics: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val recognitionSettings = remember { SecureRecognitionSettings(context) }
     var smartEnabled by remember { mutableStateOf(recognitionSettings.enabled) }
     var apiKey by remember { mutableStateOf(recognitionSettings.apiKey) }
+    var deepSeekApiKey by remember { mutableStateOf(recognitionSettings.deepSeekApiKey) }
+    var provider by remember { mutableStateOf(recognitionSettings.provider) }
     var revealKey by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
-    var pendingRestore by remember { mutableStateOf<AppData?>(null) }
-    var pendingShared by remember { mutableStateOf<Pair<com.personal.triptrail.data.Trip?, com.personal.triptrail.data.TravelStory?>?>(null) }
+    var pendingRestore by remember { mutableStateOf<PreparedImport<AppData>?>(null) }
+    var pendingShared by remember { mutableStateOf<PreparedImport<Pair<Trip?, TravelStory?>>?>(null) }
     var creator by remember { mutableStateOf(false) }
     val backupExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.triptrail.backup")) { uri ->
         if (uri != null) runCatching { context.contentResolver.openOutputStream(uri)?.use { TripBackupService(context).write(data, it) } }.onSuccess { message = "完整备份已导出，请保存到安全位置。" }.onFailure { message = "导出失败：${it.localizedMessage}" }
     }
     val backupImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) runCatching { context.contentResolver.openInputStream(uri)?.use { TripBackupService(context).read(it) } ?: error("无法打开文件") }.onSuccess { pendingRestore = it }.onFailure { message = "无法读取备份：${it.localizedMessage}" }
+        if (uri != null) scope.launch {
+            runCatching { withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { TripBackupService(context).prepareRead(it) }
+                    ?: error("无法打开文件")
+            } }.onSuccess { pendingRestore = it }.onFailure { message = "无法读取备份：${it.localizedMessage}" }
+        }
     }
     val sharedImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) runCatching { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty() }.mapCatching(TripFileService::importShared).onSuccess { pendingShared = it }.onFailure { message = "无法读取分享文件：${it.localizedMessage}" }
+        if (uri != null) scope.launch {
+            runCatching { withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { PortablePackageService(context).prepareShared(it) }
+                    ?: error("无法打开文件")
+            } }.onSuccess { pendingShared = it }.onFailure { message = "无法读取分享文件：${it.localizedMessage}" }
+        }
     }
 
     LazyColumn(
@@ -59,9 +84,17 @@ fun SettingsScreen(repository: TripRepository, data: AppData, modifier: Modifier
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text("使用大模型智能识别", Modifier.weight(1f)); Switch(smartEnabled, { checked -> smartEnabled = checked; recognitionSettings.enabled = checked }) }
             if (smartEnabled) {
                 HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = TripMist.copy(alpha = .45f))
-                OutlinedTextField(
-                    value = apiKey, onValueChange = { apiKey = it; recognitionSettings.apiKey = it }, modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    label = { Text("智谱 API Key") }, singleLine = true,
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("模型", Modifier.weight(1f))
+                    SingleChoiceSegmentedButtonRow {
+                        SegmentedButton(provider == SecureRecognitionSettings.Provider.ZHIPU, { provider = SecureRecognitionSettings.Provider.ZHIPU; recognitionSettings.provider = provider }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("智谱") }
+                        SegmentedButton(provider == SecureRecognitionSettings.Provider.DEEPSEEK, { provider = SecureRecognitionSettings.Provider.DEEPSEEK; recognitionSettings.provider = provider }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("DeepSeek") }
+                    }
+                }
+                TripFormField(
+                    value = if (provider == SecureRecognitionSettings.Provider.ZHIPU) apiKey else deepSeekApiKey,
+                    onValueChange = { value -> if (provider == SecureRecognitionSettings.Provider.ZHIPU) { apiKey = value; recognitionSettings.apiKey = value } else { deepSeekApiKey = value; recognitionSettings.deepSeekApiKey = value } }, modifier = Modifier.padding(12.dp),
+                    label = if (provider == SecureRecognitionSettings.Provider.ZHIPU) "智谱 API Key" else "DeepSeek API Key", singleLine = true,
                     visualTransformation = if (revealKey) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = { IconButton(onClick = { revealKey = !revealKey }) { Icon(if (revealKey) Icons.Default.VisibilityOff else Icons.Default.Visibility, if (revealKey) "隐藏" else "显示") } },
                 )
@@ -75,9 +108,57 @@ fun SettingsScreen(repository: TripRepository, data: AppData, modifier: Modifier
         item { SettingsGroup("关于") { SettingsRow(Icons.Default.Person, "创作者", trailing = { Row(verticalAlignment = Alignment.CenterVertically) { Text("黄逸轩", color = Color.Gray); Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) } }) { creator = true }; GroupDivider(); SettingsValueRow("版本", "0.1.0"); GroupDivider(); SettingsValueRow("系统要求", "Android 8.0+") } }
     }
 
-    pendingRestore?.let { restored -> AlertDialog(onDismissRequest = { pendingRestore = null }, title = { Text("恢复这份备份？") }, text = { Text("备份包含 ${restored.trips.size} 段旅程、${restored.stories.size} 个足迹。恢复后将替换本机当前所有数据，此操作不可撤销。") }, dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text("取消") } }, confirmButton = { Button(onClick = { repository.replaceAll(restored); pendingRestore = null; message = "恢复完成。" }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("替换本机数据") } }) }
-    pendingShared?.let { (trip, story) -> AlertDialog(onDismissRequest = { pendingShared = null }, title = { Text("收藏这份内容？") }, text = { Text("“${trip?.title ?: story?.title}”会追加为独立副本，不会覆盖已有内容。") }, dismissButton = { TextButton(onClick = { pendingShared = null }) { Text("取消") } }, confirmButton = { Button(onClick = { val current = repository.data.value; if (trip != null && current.trips.none { it.id == trip.id }) repository.replaceAll(current.copy(trips = current.trips + trip)); if (story != null && current.stories.none { it.id == story.id }) repository.replaceAll(repository.data.value.copy(stories = repository.data.value.stories + story)); pendingShared = null; message = "已添加到我的旅迹。" }) { Text("添加到我的旅迹") } }) }
-    if (creator) AlertDialog(onDismissRequest = { creator = false }, icon = { Icon(Icons.Default.Favorite, null, tint = TripSand) }, title = { Text("黄逸轩") }, text = { Text("感谢使用旅迹。愿每一次出发都有期待，每一段回忆都有地方安放。") }, confirmButton = { TextButton(onClick = { creator = false }) { Text("完成") } })
+    pendingRestore?.let { prepared ->
+        val restored = prepared.content
+        val mediaCount = restored.backupMediaReferences().distinctBy { it.id }.size
+        fun cancel() { prepared.discard(); pendingRestore = null }
+        AlertDialog(
+            onDismissRequest = ::cancel,
+            title = { Text("恢复这份备份？") },
+            text = { Text("备份包含 ${restored.trips.size} 段旅程、${restored.stories.size} 个足迹、${restored.favorites.size} 个收藏、$mediaCount 个媒体文件。恢复后将替换本机当前所有数据，此操作不可撤销。") },
+            dismissButton = { TextButton(onClick = ::cancel) { Text("取消") } },
+            confirmButton = { Button(onClick = { repository.replaceAll(restored); pendingRestore = null; message = "恢复完成。" }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("替换本机数据") } },
+        )
+    }
+    pendingShared?.let { prepared ->
+        val (trip, story) = prepared.content
+        fun cancel() { prepared.discard(); pendingShared = null }
+        AlertDialog(
+            onDismissRequest = ::cancel,
+            title = { Text("收藏这份内容？") },
+            text = { Text("“${trip?.title ?: story?.title}”会追加为独立副本，不会覆盖已有内容。") },
+            dismissButton = { TextButton(onClick = ::cancel) { Text("取消") } },
+            confirmButton = { Button(onClick = {
+                val current = repository.data.value
+                val exists = (trip != null && current.trips.any { it.id == trip.id }) || (story != null && current.stories.any { it.id == story.id })
+                if (exists) {
+                    prepared.discard()
+                    message = "这份内容已经导入过了。"
+                } else if (trip != null) {
+                    repository.replaceAll(current.copy(trips = current.trips + trip))
+                    message = "旅程已添加到我的旅迹。"
+                } else if (story != null) {
+                    repository.replaceAll(current.copy(stories = current.stories + story))
+                    message = "足迹已添加到我的旅迹。"
+                }
+                pendingShared = null
+            }) { Text("添加到我的旅迹") } },
+        )
+    }
+    if (creator) AlertDialog(
+        onDismissRequest = { creator = false },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = TripSurface,
+        text = {
+            Image(
+                    painter = painterResource(R.drawable.creator_reward),
+                    contentDescription = "微信赞赏二维码",
+                    modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(20.dp)),
+                    contentScale = ContentScale.Fit,
+                )
+        },
+        confirmButton = { TextButton(onClick = { creator = false }) { Text("完成") } },
+    )
     message?.let { AlertDialog(onDismissRequest = { message = null }, title = { Text("提示") }, text = { Text(it) }, confirmButton = { TextButton(onClick = { message = null }) { Text("好") } }) }
 }
 

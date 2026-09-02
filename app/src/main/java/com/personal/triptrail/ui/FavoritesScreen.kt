@@ -120,7 +120,7 @@ private fun FavoriteFilterBar(count: Int, selected: PlaceCategory?, onSelect: (P
                 TextButton(onClick = { menu = true }, contentPadding = PaddingValues(horizontal = 6.dp)) {
                     Icon(Icons.Default.FilterList, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(selected?.label ?: "全部类型")
                 }
-                DropdownMenu(menu, { menu = false }) {
+                TripDropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem({ Text("全部类型") }, onClick = { onSelect(null); menu = false }, leadingIcon = { if (selected == null) Icon(Icons.Default.Check, null) })
                     PlaceCategory.entries.forEach { item ->
                         DropdownMenuItem({ Text(item.label) }, onClick = { onSelect(item); menu = false }, leadingIcon = { Icon(if (selected == item) Icons.Default.Check else item.icon(), null) })
@@ -135,7 +135,7 @@ private fun FavoriteFilterBar(count: Int, selected: PlaceCategory?, onSelect: (P
 private fun FavoriteCard(favorite: ItineraryItem, onEdit: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Surface(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 170.dp),
+        modifier = Modifier.fillMaxWidth().height(220.dp),
         onClick = onEdit,
         shape = RoundedCornerShape(20.dp), color = TripSurface,
         border = androidx.compose.foundation.BorderStroke(.8.dp, TripMist.copy(alpha = .42f)), shadowElevation = 2.dp,
@@ -161,9 +161,9 @@ private fun FavoriteCard(favorite: ItineraryItem, onEdit: () -> Unit, onDelete: 
             }
             Box(Modifier.align(Alignment.TopEnd)) {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreHoriz, "更多操作", tint = TripLakeText) }
-                DropdownMenu(menu, { menu = false }) {
+                TripDropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem({ Text("编辑收藏") }, onClick = { menu = false; onEdit() }, leadingIcon = { Icon(Icons.Default.Edit, null) })
-                    DropdownMenuItem({ Text("删除收藏") }, onClick = { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null) })
+                    DropdownMenuItem({ Text("删除收藏", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
                 }
             }
         }
@@ -194,27 +194,29 @@ private fun FavoriteEditorDialog(repository: TripRepository, original: Itinerary
     }
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = TripSurface,
         title = { Text(if (isNew) "新建收藏" else "编辑收藏") },
         text = { Column(Modifier.heightIn(max = 620.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(title, { title = it }, label = { Text("名称") }, modifier = Modifier.fillMaxWidth())
+            TripFormField(title, { title = it }, "名称")
             Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PlaceCategory.entries.forEach { item -> FilterChip(category == item, { category = item }, { Text(item.label) }, leadingIcon = { Icon(item.icon(), null, Modifier.size(16.dp)) }) }
             }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { ArrangementLocationMode.entries.forEachIndexed { index, item -> SegmentedButton(selected = mode == item, onClick = { mode = item }, shape = SegmentedButtonDefaults.itemShape(index, ArrangementLocationMode.entries.size)) { Text(item.label) } } }
             if (mode == ArrangementLocationMode.SINGLE) {
-                OutlinedTextField(place, { place = it }, label = { Text("地点名称") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(address, { address = it }, label = { Text("详细地址（选填）") }, modifier = Modifier.fillMaxWidth())
+                TripFormField(place, { place = it }, "地点名称")
+                TripFormField(address, { address = it }, "详细地址（选填）")
             } else {
-                OutlinedTextField(origin, { origin = it }, label = { Text("出发地名称") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(originAddress, { originAddress = it }, label = { Text("出发地详细地址（选填）") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(destination, { destination = it }, label = { Text("目的地名称") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(destinationAddress, { destinationAddress = it }, label = { Text("目的地详细地址（选填）") }, modifier = Modifier.fillMaxWidth())
+                TripFormField(origin, { origin = it }, "出发地名称")
+                TripFormField(originAddress, { originAddress = it }, "出发地详细地址（选填）")
+                TripFormField(destination, { destination = it }, "目的地名称")
+                TripFormField(destinationAddress, { destinationAddress = it }, "目的地详细地址（选填）")
             }
-            OutlinedTextField(note, { note = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            TripFormField(note, { note = it }, "备注", minLines = 3, singleLine = false)
             Text("前往方式", style = MaterialTheme.typography.labelLarge)
             Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { TransportMode.entries.forEach { item -> FilterChip(transport == item, { transport = item }, { Text(item.label) }) } }
-            OutlinedTextField(distance, { distance = it }, label = { Text("交通或距离") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(cost, { cost = it }, label = { Text("预算") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            TripFormField(distance, { distance = it }, "交通或距离")
+            TripFormField(cost, { cost = it }, "预算", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
             if (media.isNotEmpty()) MediaStrip(media) { id -> media = media.filterNot { it.id == id } }
             OutlinedButton(onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(6.dp)); Text("从系统相簿选择（${media.size}/20）") }
         } },

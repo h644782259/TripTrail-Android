@@ -1,5 +1,6 @@
 package com.personal.triptrail.ui
 
+import android.net.Uri
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
@@ -8,24 +9,42 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.triptrail.data.TravelStory
 import com.personal.triptrail.data.Trip
 import com.personal.triptrail.data.TripRepository
-import com.personal.triptrail.util.TripFileService
+import com.personal.triptrail.util.PortablePackageService
+import com.personal.triptrail.util.PreparedImport
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
-fun TripTrailApp(repository: TripRepository, initialSharedFile: String?) {
+fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?) {
+    val context = LocalContext.current
     val data by repository.data.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(RootTab.TRIPS) }
     var tripId by rememberSaveable { mutableStateOf<String?>(null) }
     var storyId by rememberSaveable { mutableStateOf<String?>(null) }
     var showsStatistics by rememberSaveable { mutableStateOf(false) }
-    var incoming by remember { mutableStateOf<Pair<Trip?, TravelStory?>?>(null) }
+    var incoming by remember { mutableStateOf<PreparedImport<Pair<Trip?, TravelStory?>>?>(null) }
     var incomingError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(initialSharedFile) {
-        if (!initialSharedFile.isNullOrBlank()) runCatching { TripFileService.importShared(initialSharedFile) }
+    LaunchedEffect(repository) {
+        while (true) {
+            repository.refreshAutomaticStatuses()
+            delay(30_000)
+        }
+    }
+
+    LaunchedEffect(initialSharedUri) {
+        if (initialSharedUri != null) runCatching {
+            withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(initialSharedUri)?.use { PortablePackageService(context).prepareShared(it) }
+                    ?: error("无法打开分享文件")
+            }
+        }
             .onSuccess { incoming = it }.onFailure { incomingError = it.message ?: "无法读取分享文件" }
     }
 
@@ -46,16 +65,19 @@ fun TripTrailApp(repository: TripRepository, initialSharedFile: String?) {
         }
     }
 
-    incoming?.let { (trip, story) ->
+    incoming?.let { prepared ->
+        val (trip, story) = prepared.content
         AlertDialog(
-            onDismissRequest = { incoming = null },
+            onDismissRequest = { prepared.discard(); incoming = null },
             title = { Text("收藏这份${if (trip != null) "旅程" else "足迹"}？") },
             text = { Text("“${trip?.title ?: story?.title}”会作为独立副本添加，不会覆盖本机已有内容。") },
-            dismissButton = { TextButton(onClick = { incoming = null }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { prepared.discard(); incoming = null }) { Text("取消") } },
             confirmButton = { TextButton(onClick = {
                 val current = repository.data.value
-                if (trip != null && current.trips.none { it.id == trip.id }) repository.replaceAll(current.copy(trips = current.trips + trip))
-                if (story != null && current.stories.none { it.id == story.id }) repository.replaceAll(current.copy(stories = current.stories + story))
+                val exists = (trip != null && current.trips.any { it.id == trip.id }) || (story != null && current.stories.any { it.id == story.id })
+                if (exists) prepared.discard()
+                else if (trip != null) repository.replaceAll(current.copy(trips = current.trips + trip))
+                else if (story != null) repository.replaceAll(current.copy(stories = current.stories + story))
                 incoming = null
             }) { Text("添加到我的旅迹") } },
         )

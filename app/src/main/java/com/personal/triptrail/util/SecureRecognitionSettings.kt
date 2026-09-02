@@ -13,16 +13,33 @@ import javax.crypto.spec.GCMParameterSpec
 class SecureRecognitionSettings(context: Context) {
     private val preferences = context.getSharedPreferences("smart-recognition", Context.MODE_PRIVATE)
     var enabled: Boolean
-        get() = preferences.getBoolean("enabled", false) && apiKey.isNotBlank()
+        get() = preferences.getBoolean("enabled", false) && activeApiKey.isNotBlank()
         set(value) { preferences.edit().putBoolean("enabled", value).apply() }
 
     var apiKey: String
-        get() = decrypt(preferences.getString("api-key", null).orEmpty())
+        get() = zhipuApiKey
         set(value) {
-            val trimmed = value.trim()
-            preferences.edit().putString("api-key", if (trimmed.isBlank()) "" else encrypt(trimmed)).apply()
-            if (trimmed.isBlank()) enabled = false
+            zhipuApiKey = value
+            if (value.trim().isBlank()) enabled = false
         }
+
+    var provider: Provider
+        get() = Provider.entries.firstOrNull { it.name == preferences.getString("provider", null) } ?: Provider.ZHIPU
+        set(value) { preferences.edit().putString("provider", value.name).apply() }
+    var zhipuApiKey: String
+        get() = decrypt(preferences.getString("zhipu-api-key", preferences.getString("api-key", null)).orEmpty())
+        set(value) { saveKey("zhipu-api-key", value) }
+    var deepSeekApiKey: String
+        get() = decrypt(preferences.getString("deepseek-api-key", null).orEmpty())
+        set(value) { saveKey("deepseek-api-key", value) }
+    val activeApiKey: String get() = if (provider == Provider.ZHIPU) zhipuApiKey else deepSeekApiKey
+
+    enum class Provider { ZHIPU, DEEPSEEK }
+
+    private fun saveKey(name: String, value: String) {
+        val trimmed = value.trim()
+        preferences.edit().putString(name, if (trimmed.isBlank()) "" else encrypt(trimmed)).apply()
+    }
 
     private fun secretKey(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

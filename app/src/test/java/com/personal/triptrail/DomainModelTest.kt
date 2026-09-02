@@ -4,10 +4,21 @@ import com.personal.triptrail.data.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import com.personal.triptrail.util.TripFileService
+import com.personal.triptrail.util.PortablePackageCodec
 import com.personal.triptrail.util.backupMediaReferences
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.file.Files
+import java.util.Base64
 
 class DomainModelTest {
     @Test
@@ -126,5 +137,172 @@ class DomainModelTest {
         )
 
         assertEquals(setOf("trip", "cover", "entry", "favorite"), data.backupMediaReferences().map { it.id }.toSet())
+    }
+
+    @Test
+    fun executionStatusIsDerivedFromTime() {
+        val now = parseDate("2026-09-10")!! + 12 * 3_600_000L
+
+        assertEquals(ItineraryExecutionStatus.COMPLETED, ItineraryItem(startTime = now - 7_200_000L, endTime = now - 1).automaticExecutionStatus(now))
+        assertEquals(ItineraryExecutionStatus.IN_PROGRESS, ItineraryItem(startTime = now - 1, endTime = now + 1).automaticExecutionStatus(now))
+        assertEquals(ItineraryExecutionStatus.NOT_STARTED, ItineraryItem(startTime = now + 1, endTime = now + 3_600_000L).automaticExecutionStatus(now))
+    }
+
+    @Test
+    fun multiDayShareContainsOnlySelectedDays() {
+        val first = TripDay(id = "one", date = parseDate("2026-09-10")!!, title = "第一天")
+        val second = TripDay(id = "two", date = parseDate("2026-09-11")!!, title = "第二天")
+        val trip = Trip(title = "杭州", destination = "杭州", startDate = first.date, endDate = second.date, days = listOf(first, second))
+
+        val shared = TripFileService.tripForSharing(trip, setOf("two"))
+
+        assertEquals(listOf("two"), shared.days.map { it.id })
+        assertEquals(second.date, shared.startDate)
+        assertEquals(second.date, shared.endDate)
+    }
+
+    @Test
+    fun iosBackupJsonMapsMillisecondsChineseEnumsAndMedia() {
+        val media = JSONObject().apply {
+            put("id", "media-1"); put("localIdentifier", "ios-library-id"); put("kindRaw", "image")
+            put("caption", "窗外"); put("createdAt", 1_788_341_732_003.561); put("sortOrder", 0)
+        }
+        val item = JSONObject().apply {
+            put("id", "item-1"); put("title", "高铁前往杭州"); put("categoryRaw", "交通")
+            put("startTime", 1_784_157_000_000L); put("endTime", 1_784_160_900_000L)
+            put("locationModeRaw", "起终点"); put("transportRaw", "火车"); put("executionStatusRaw", "已完成")
+            put("isCompleted", true); put("media", JSONArray().put(media))
+        }
+        val day = JSONObject().apply {
+            put("id", "day-1"); put("date", 1_784_131_200_000L); put("title", "第 1 天")
+            put("items", JSONArray().put(item))
+        }
+        val root = JSONObject().apply {
+            put("formatVersion", 1)
+            put("trips", JSONArray().put(JSONObject().apply {
+                put("id", "trip-1"); put("title", "杭州"); put("destination", "杭州")
+                put("startDate", 1_784_131_200_000L); put("endDate", 1_784_131_200_000L)
+                put("days", JSONArray().put(day))
+            }))
+            put("stories", JSONArray()); put("favorites", JSONArray())
+        }
+
+        val restored = TripFileService.importBackup(root.toString())
+        val restoredItem = restored.trips.single().days.single().items.single()
+
+        assertEquals(PlaceCategory.TRANSPORT, restoredItem.category)
+        assertEquals(ArrangementLocationMode.ROUTE, restoredItem.locationMode)
+        assertEquals(TransportMode.TRAIN, restoredItem.transport)
+        assertEquals(ItineraryExecutionStatus.COMPLETED, restoredItem.executionStatus)
+        assertEquals("media-1", restoredItem.media.single().id)
+        assertEquals(1_788_341_732_003L, restoredItem.media.single().createdAt)
+    }
+
+    @Test
+    fun iosPortableEnvelopeDecodesBase64ContentAndMediaPayload() {
+        val content = """{"formatVersion":1,"trips":[],"stories":[],"favorites":[]}"""
+        val payload = "image-bytes".toByteArray()
+        val manifest = JSONObject().apply {
+            put("format", "triptrail.portable-package"); put("formatVersion", 1); put("kind", "backup")
+            put("contentData", Base64.getEncoder().encodeToString(content.toByteArray()))
+            put("media", JSONArray().put(JSONObject().apply {
+                put("referenceID", "media-1"); put("kindRaw", "image")
+                put("originalFilename", "photo.jpg"); put("byteCount", payload.size)
+            }))
+        }.toString().toByteArray()
+        val bytes = ByteArrayOutputStream().apply {
+            write(PortablePackageCodec.magic)
+            write(ByteBuffer.allocate(Long.SIZE_BYTES).order(ByteOrder.BIG_ENDIAN).putLong(manifest.size.toLong()).array())
+            write(manifest); write(payload)
+        }.toByteArray()
+        val input = ByteArrayInputStream(bytes).buffered()
+        val envelope = PortablePackageCodec.readEnvelope(input)
+        val directory = Files.createTempDirectory("triptrail-portable-test").toFile()
+
+        try {
+            val extracted = PortablePackageCodec.extractPayload(input, envelope.media, directory)
+            assertEquals(content, envelope.content)
+            assertEquals("media-1", extracted.single().first.referenceID)
+            assertTrue(extracted.single().second.readBytes().contentEquals(payload))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun iosSharedTripJsonParsesIsoDatesAndMediaReferences() {
+        val shared = JSONObject().apply {
+            put("format", "triptrail.shared-journey"); put("formatVersion", 1); put("kind", "trip")
+            put("trip", JSONObject().apply {
+                put("id", "trip-1"); put("title", "杭州三日"); put("destination", "杭州")
+                put("startDate", "2026-07-15T00:00:00Z"); put("endDate", "2026-07-15T00:00:00Z")
+                put("days", JSONArray().put(JSONObject().apply {
+                    put("id", "day-1"); put("date", "2026-07-15T00:00:00Z")
+                    put("items", JSONArray().put(JSONObject().apply {
+                        put("id", "item-1"); put("title", "西湖"); put("categoryRaw", "景点")
+                        put("startTime", "2026-07-15T01:00:00Z"); put("endTime", "2026-07-15T03:00:00Z")
+                        put("media", JSONArray().put(JSONObject().apply {
+                            put("id", "photo-1"); put("localIdentifier", ""); put("kindRaw", "image")
+                        }))
+                    }))
+                }))
+            })
+        }
+
+        val (trip, story) = TripFileService.importShared(shared.toString())
+
+        assertEquals(null, story)
+        assertEquals("杭州三日", trip?.title)
+        assertEquals("photo-1", trip?.days?.single()?.items?.single()?.media?.single()?.id)
+    }
+
+    @Test
+    fun iosSharedFootprintJsonAttachesFlatEntriesToTheirDays() {
+        val shared = JSONObject().apply {
+            put("format", "triptrail.shared-journey"); put("formatVersion", 1); put("kind", "footprint")
+            put("story", JSONObject().apply {
+                put("id", "story-1"); put("title", "杭州足迹"); put("destination", "杭州")
+                put("startDate", "2026-07-15T00:00:00Z"); put("endDate", "2026-07-15T00:00:00Z")
+                put("days", JSONArray().put(JSONObject().apply {
+                    put("id", "story-day-1"); put("date", "2026-07-15T00:00:00Z"); put("title", "第一天")
+                }))
+                put("entries", JSONArray().put(JSONObject().apply {
+                    put("id", "entry-1"); put("storyDayID", "story-day-1"); put("title", "断桥残雪")
+                    put("categoryRaw", "景点"); put("startTime", "2026-07-15T01:00:00Z")
+                    put("media", JSONArray().put(JSONObject().apply {
+                        put("id", "photo-1"); put("localIdentifier", ""); put("kindRaw", "image")
+                    }))
+                }))
+            })
+        }
+
+        val (trip, story) = TripFileService.importShared(shared.toString())
+
+        assertEquals(null, trip)
+        assertEquals("entry-1", story?.days?.single()?.entries?.single()?.id)
+        assertEquals("photo-1", story?.days?.single()?.entries?.single()?.media?.single()?.id)
+    }
+
+    @Test
+    fun suppliedIosBackupFixtureCanBeDecodedAndFullyRead() {
+        val path = System.getenv("TRIPTRAIL_IOS_BACKUP_FIXTURE")
+        assumeTrue(!path.isNullOrBlank() && File(path).isFile)
+        File(path!!).inputStream().buffered().use { input ->
+            val envelope = PortablePackageCodec.readEnvelope(input)
+            val restored = TripFileService.importBackup(envelope.content)
+            val directory = Files.createTempDirectory("triptrail-ios-fixture").toFile()
+            try {
+                val extracted = PortablePackageCodec.extractPayload(input, envelope.media, directory)
+                assertTrue(restored.trips.isNotEmpty() || restored.stories.isNotEmpty())
+                assertEquals(envelope.media.size, extracted.size)
+                assertEquals(envelope.media.sumOf { it.byteCount }, extracted.sumOf { it.second.length() })
+                assertEquals(
+                    envelope.media.map { it.referenceID }.toSet(),
+                    restored.backupMediaReferences().map { it.id }.toSet(),
+                )
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
     }
 }

@@ -246,6 +246,21 @@ fun Trip.phase(now: Long = System.currentTimeMillis()): TripPhase {
     }
 }
 
+fun ItineraryItem.automaticExecutionStatus(now: Long = System.currentTimeMillis()): ItineraryExecutionStatus = when {
+    endTime <= now -> ItineraryExecutionStatus.COMPLETED
+    startTime <= now -> ItineraryExecutionStatus.IN_PROGRESS
+    else -> ItineraryExecutionStatus.NOT_STARTED
+}
+
+fun ItineraryItem.withAutomaticExecutionStatus(now: Long = System.currentTimeMillis()): ItineraryItem {
+    val status = automaticExecutionStatus(now)
+    return copy(
+        executionStatus = status,
+        isCompleted = status == ItineraryExecutionStatus.COMPLETED,
+        isAutomaticCompletionOverridden = false,
+    )
+}
+
 fun List<Trip>.timelineSorted(now: Long = System.currentTimeMillis()): List<Trip> = sortedWith(
     compareBy<Trip> { it.phase(now).ordinal }.thenComparator { a, b ->
         when (a.phase(now)) {
