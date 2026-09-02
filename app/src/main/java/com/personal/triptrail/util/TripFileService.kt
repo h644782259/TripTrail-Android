@@ -21,6 +21,15 @@ object TripFileService {
         put("trip", tripJson(trip, includeLocalUris = false))
     }.toString(2)
 
+    fun shareTripDay(trip: Trip, day: TripDay): String = shareTrip(
+        trip.copy(
+            title = "${trip.title} · ${day.title.ifBlank { day.date.chineseDateText() }}",
+            startDate = day.date.startOfDay(),
+            endDate = day.date.startOfDay(),
+            days = listOf(day.copy(sortOrder = 0)),
+        )
+    )
+
     fun shareStory(story: TravelStory): String = JSONObject().apply {
         put("format", "triptrail.shared-journey")
         put("formatVersion", 1)
@@ -28,6 +37,15 @@ object TripFileService {
         put("kind", "footprint")
         put("story", storyJson(story, includeLocalUris = false))
     }.toString(2)
+
+    fun shareStoryDay(story: TravelStory, day: StoryDay): String = shareStory(
+        story.copy(
+            title = "${story.title} · ${day.title.ifBlank { day.date.chineseDateText() }}",
+            startDate = day.date.startOfDay(),
+            endDate = day.date.startOfDay(),
+            days = listOf(day.copy(sortOrder = 0)),
+        )
+    )
 
     fun importShared(text: String): Pair<Trip?, TravelStory?> {
         val root = JSONObject(text)
@@ -54,9 +72,13 @@ object TripFileService {
     private fun itemJson(item: ItineraryItem, includeLocalUris: Boolean) = JSONObject().apply {
         put("id", item.id); put("title", item.title); put("categoryRaw", item.category.label)
         put("startTime", Instant.ofEpochMilli(item.startTime).toString()); put("endTime", Instant.ofEpochMilli(item.endTime).toString())
-        put("address", item.address); put("note", item.note); put("transportRaw", item.transport.label); put("distanceText", item.distanceText)
+        put("address", item.address); put("note", item.note)
+        put("locationModeRaw", item.locationMode.name.lowercase()); put("placeName", item.placeName); put("placeAddress", item.placeAddress)
+        put("originName", item.originName); put("originAddress", item.originAddress); put("destinationName", item.destinationName); put("destinationAddress", item.destinationAddress)
+        put("transportRaw", item.transport.label); put("distanceText", item.distanceText)
         put("playDurationMinutes", item.playDurationMinutes); put("reservationInfo", item.reservationInfo); put("cost", item.cost)
-        put("isCompleted", item.isCompleted); put("isAutomaticCompletionOverridden", item.isAutomaticCompletionOverridden); put("sortOrder", item.sortOrder)
+        put("isCompleted", item.isCompleted); put("executionStatusRaw", item.executionStatus.name.lowercase()); put("isAutomaticCompletionOverridden", item.isAutomaticCompletionOverridden); put("sortOrder", item.sortOrder)
+        put("isFavorite", item.isFavorite); put("favoriteCreatedAt", Instant.ofEpochMilli(item.favoriteCreatedAt).toString()); put("sourceFavoriteID", item.sourceFavoriteId ?: JSONObject.NULL)
         put("media", JSONArray(if (includeLocalUris) item.media.map(::mediaJson) else emptyList<JSONObject>()))
     }
 
@@ -64,6 +86,8 @@ object TripFileService {
         put("id", story.id); put("title", story.title); put("destination", story.destination)
         put("startDate", Instant.ofEpochMilli(story.startDate).toString()); put("endDate", Instant.ofEpochMilli(story.endDate).toString())
         put("summary", story.summary); put("createdAt", Instant.ofEpochMilli(story.createdAt).toString())
+        put("coverZoom", story.coverZoom); put("coverOffsetX", story.coverOffsetX); put("coverOffsetY", story.coverOffsetY)
+        put("coverMedia", if (includeLocalUris && story.coverMedia != null) mediaJson(story.coverMedia) else JSONObject.NULL)
         put("sourceTripID", JSONObject.NULL); put("syncScopeRaw", "trip"); put("sourceSelectionIDsRaw", "")
         put("days", JSONArray(story.days.sortedBy { it.sortOrder }.map { storyDayJson(it) }))
         put("entries", JSONArray(story.days.sortedBy { it.sortOrder }.flatMap { day -> day.entries.sortedBy { it.sortOrder }.map { storyEntryJson(it, day.id, includeLocalUris) } }))
@@ -79,6 +103,8 @@ object TripFileService {
         put("startTime", entry.startTime?.let { Instant.ofEpochMilli(it).toString() } ?: JSONObject.NULL)
         put("endTime", entry.endTime?.let { Instant.ofEpochMilli(it).toString() } ?: JSONObject.NULL)
         put("timeLabel", entry.timeLabel); put("address", entry.address); put("supplementalInfo", entry.supplementalInfo); put("note", entry.note)
+        put("locationModeRaw", entry.locationMode.name.lowercase()); put("placeName", entry.placeName); put("placeAddress", entry.placeAddress)
+        put("originName", entry.originName); put("originAddress", entry.originAddress); put("destinationName", entry.destinationName); put("destinationAddress", entry.destinationAddress)
         put("transportRaw", entry.transport.label); put("routeInfo", entry.routeInfo); put("cost", entry.cost); put("didPrefillSourceMemory", true)
         put("sourceMemoryPrefill", JSONObject.NULL); put("sortOrder", entry.sortOrder); put("sourceItemID", JSONObject.NULL); put("storyDayID", dayId)
         put("media", JSONArray(if (includeLocalUris) entry.media.map(::mediaJson) else emptyList<JSONObject>()))
@@ -104,9 +130,15 @@ object TripFileService {
     private fun parseItem(obj: JSONObject) = ItineraryItem(
         id = obj.getString("id"), title = obj.getString("title"), category = PlaceCategory.fromLabel(obj.optString("categoryRaw")),
         startTime = instant(obj.getString("startTime")), endTime = instant(obj.getString("endTime")), address = obj.optString("address"), note = obj.optString("note"),
+        locationMode = enumValueOrDefault(obj.optString("locationModeRaw"), ArrangementLocationMode.SINGLE),
+        placeName = obj.optString("placeName"), placeAddress = obj.optString("placeAddress"), originName = obj.optString("originName"), originAddress = obj.optString("originAddress"),
+        destinationName = obj.optString("destinationName"), destinationAddress = obj.optString("destinationAddress"),
         transport = TransportMode.fromLabel(obj.optString("transportRaw")), distanceText = obj.optString("distanceText"), playDurationMinutes = obj.optInt("playDurationMinutes", 60),
         reservationInfo = obj.optString("reservationInfo"), cost = obj.optDouble("cost", 0.0), isCompleted = obj.optBoolean("isCompleted"),
-        isAutomaticCompletionOverridden = obj.optBoolean("isAutomaticCompletionOverridden"), sortOrder = obj.optInt("sortOrder")
+        executionStatus = enumValueOrDefault(obj.optString("executionStatusRaw"), if (obj.optBoolean("isCompleted")) ItineraryExecutionStatus.COMPLETED else ItineraryExecutionStatus.NOT_STARTED),
+        isAutomaticCompletionOverridden = obj.optBoolean("isAutomaticCompletionOverridden"), sortOrder = obj.optInt("sortOrder"), isFavorite = obj.optBoolean("isFavorite"),
+        favoriteCreatedAt = obj.optString("favoriteCreatedAt").takeIf { it.isNotBlank() }?.let(::instant) ?: System.currentTimeMillis(),
+        sourceFavoriteId = obj.optString("sourceFavoriteID").takeIf { it.isNotBlank() && it != "null" }
     )
 
     private fun parseStory(obj: JSONObject): TravelStory {
@@ -116,6 +148,8 @@ object TripFileService {
             id = obj.getString("id"), title = obj.getString("title"), destination = obj.optString("destination"),
             startDate = instant(obj.getString("startDate")), endDate = instant(obj.getString("endDate")), summary = obj.optString("summary"),
             createdAt = instant(obj.optString("createdAt", Instant.now().toString())),
+            coverMedia = obj.optJSONObject("coverMedia")?.let(::parseMedia), coverZoom = obj.optDouble("coverZoom", 1.0),
+            coverOffsetX = obj.optDouble("coverOffsetX", 0.0), coverOffsetY = obj.optDouble("coverOffsetY", 0.0),
             days = dayObjects.map { day -> StoryDay(
                 id = day.getString("id"), date = instant(day.getString("date")), title = day.optString("title"), note = day.optString("note"),
                 details = day.optString("details"), sortOrder = day.optInt("sortOrder"),
@@ -129,8 +163,20 @@ object TripFileService {
         startTime = obj.optString("startTime").takeIf { it.isNotBlank() && it != "null" }?.let(::instant),
         endTime = obj.optString("endTime").takeIf { it.isNotBlank() && it != "null" }?.let(::instant), timeLabel = obj.optString("timeLabel"),
         address = obj.optString("address"), supplementalInfo = obj.optString("supplementalInfo"), note = obj.optString("note"),
+        locationMode = enumValueOrDefault(obj.optString("locationModeRaw"), ArrangementLocationMode.SINGLE),
+        placeName = obj.optString("placeName"), placeAddress = obj.optString("placeAddress"), originName = obj.optString("originName"), originAddress = obj.optString("originAddress"),
+        destinationName = obj.optString("destinationName"), destinationAddress = obj.optString("destinationAddress"),
         transport = TransportMode.fromLabel(obj.optString("transportRaw")), routeInfo = obj.optString("routeInfo"), cost = obj.optDouble("cost", 0.0), sortOrder = obj.optInt("sortOrder")
     )
+
+    private fun parseMedia(obj: JSONObject) = MediaReference(
+        id = obj.optString("id", java.util.UUID.randomUUID().toString()), localUri = obj.optString("localIdentifier"),
+        kind = if (obj.optString("kindRaw") == "video") MediaKind.VIDEO else MediaKind.IMAGE, caption = obj.optString("caption"),
+        createdAt = obj.optString("createdAt").takeIf { it.isNotBlank() }?.let(::instant) ?: System.currentTimeMillis(), sortOrder = obj.optInt("sortOrder")
+    )
+
+    private inline fun <reified T : Enum<T>> enumValueOrDefault(raw: String, fallback: T): T =
+        enumValues<T>().firstOrNull { it.name.equals(raw, true) } ?: fallback
 
     private fun instant(value: String): Long = Instant.parse(value).toEpochMilli()
     private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }

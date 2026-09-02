@@ -27,6 +27,26 @@ enum class TransportMode(val label: String, val amapValue: String) {
 }
 
 @Serializable
+enum class ArrangementLocationMode(val label: String) { SINGLE("单地点"), ROUTE("起终点") }
+
+@Serializable
+enum class ItineraryExecutionStatus(val label: String) {
+    NOT_STARTED("未开始"), IN_PROGRESS("进行中"), COMPLETED("已完成")
+}
+
+@Serializable
+enum class JourneyLocationRole(val label: String) { PLACE("地点"), ORIGIN("出发地"), DESTINATION("目的地") }
+
+@Serializable
+data class JourneyLocationTarget(
+    val role: JourneyLocationRole,
+    val name: String,
+    val address: String = "",
+) {
+    val displayName get() = name.trim().ifBlank { address.trim() }
+}
+
+@Serializable
 enum class MediaKind { IMAGE, VIDEO }
 
 @Serializable
@@ -48,18 +68,68 @@ data class ItineraryItem(
     val endTime: Long = System.currentTimeMillis() + 3_600_000,
     val address: String = "",
     val note: String = "",
+    val locationMode: ArrangementLocationMode = ArrangementLocationMode.SINGLE,
+    val placeName: String = "",
+    val placeAddress: String = "",
+    val originName: String = "",
+    val originAddress: String = "",
+    val destinationName: String = "",
+    val destinationAddress: String = "",
     val transport: TransportMode = TransportMode.CAR,
     val distanceText: String = "",
     val playDurationMinutes: Int = 60,
     val reservationInfo: String = "",
     val cost: Double = 0.0,
     val isCompleted: Boolean = false,
+    val executionStatus: ItineraryExecutionStatus = if (isCompleted) ItineraryExecutionStatus.COMPLETED else ItineraryExecutionStatus.NOT_STARTED,
     val isAutomaticCompletionOverridden: Boolean = false,
     val sortOrder: Int = 0,
+    val isFavorite: Boolean = false,
+    val favoriteCreatedAt: Long = System.currentTimeMillis(),
+    val sourceFavoriteId: String? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,
     val media: List<MediaReference> = emptyList(),
-)
+) {
+    val locationTargets: List<JourneyLocationTarget>
+        get() = when (locationMode) {
+            ArrangementLocationMode.SINGLE -> listOfNotNull(
+                JourneyLocationTarget(
+                    JourneyLocationRole.PLACE,
+                    cleanLocationName(placeName.ifBlank { title }),
+                    placeAddress.ifBlank { address }
+                ).takeIf { it.displayName.isNotBlank() }
+            )
+            ArrangementLocationMode.ROUTE -> listOf(
+                JourneyLocationTarget(JourneyLocationRole.ORIGIN, cleanLocationName(originName), originAddress),
+                JourneyLocationTarget(JourneyLocationRole.DESTINATION, cleanLocationName(destinationName), destinationAddress)
+            ).filter { it.displayName.isNotBlank() }
+        }
+    val primaryNavigationTarget get() = when (locationMode) {
+        ArrangementLocationMode.SINGLE -> locationTargets.firstOrNull()
+        ArrangementLocationMode.ROUTE -> locationTargets.firstOrNull { it.role == JourneyLocationRole.DESTINATION } ?: locationTargets.firstOrNull()
+    }
+    val nextNavigationTarget get() = when (locationMode) {
+        ArrangementLocationMode.SINGLE -> locationTargets.firstOrNull()
+        ArrangementLocationMode.ROUTE -> locationTargets.firstOrNull { it.role == JourneyLocationRole.ORIGIN } ?: locationTargets.firstOrNull()
+    }
+    val locationSummary get() = locationTargets.joinToString(" → ") { it.displayName }
+}
+
+fun ItineraryItem.importedFromFavorite(startTime: Long, createdAt: Long = System.currentTimeMillis()): ItineraryItem {
+    val duration = playDurationMinutes.coerceAtLeast(60)
+    return copy(
+        id = UUID.randomUUID().toString(),
+        startTime = startTime,
+        endTime = startTime + duration * 60_000L,
+        isFavorite = false,
+        sourceFavoriteId = id,
+        favoriteCreatedAt = createdAt,
+        executionStatus = ItineraryExecutionStatus.NOT_STARTED,
+        isCompleted = false,
+        media = media.mapIndexed { index, reference -> reference.copy(id = UUID.randomUUID().toString(), sortOrder = index) },
+    )
+}
 
 @Serializable
 data class TripDay(
@@ -83,9 +153,9 @@ data class Trip(
     val days: List<TripDay> = emptyList(),
 ) {
     val allItems get() = days.sortedBy { it.sortOrder }.flatMap { it.items.sortedBy { item -> item.sortOrder } }
-    val completedCount get() = allItems.count { it.isCompleted }
+    val completedCount get() = allItems.count { it.executionStatus == ItineraryExecutionStatus.COMPLETED }
     val totalCount get() = allItems.size
-    val nextUnfinishedItem get() = allItems.firstOrNull { !it.isCompleted }
+    val nextUnfinishedItem get() = allItems.firstOrNull { it.executionStatus != ItineraryExecutionStatus.COMPLETED }
 }
 
 @Serializable
@@ -99,13 +169,34 @@ data class StoryEntry(
     val address: String = "",
     val supplementalInfo: String = "",
     val note: String = "",
+    val locationMode: ArrangementLocationMode = ArrangementLocationMode.SINGLE,
+    val placeName: String = "",
+    val placeAddress: String = "",
+    val originName: String = "",
+    val originAddress: String = "",
+    val destinationName: String = "",
+    val destinationAddress: String = "",
     val transport: TransportMode = TransportMode.CAR,
     val routeInfo: String = "",
     val cost: Double = 0.0,
     val sortOrder: Int = 0,
     val sourceItemId: String? = null,
     val media: List<MediaReference> = emptyList(),
-)
+) {
+    val locationTargets: List<JourneyLocationTarget>
+        get() = when (locationMode) {
+            ArrangementLocationMode.SINGLE -> listOfNotNull(
+                JourneyLocationTarget(JourneyLocationRole.PLACE, cleanLocationName(placeName.ifBlank { title }), placeAddress.ifBlank { address })
+                    .takeIf { it.displayName.isNotBlank() }
+            )
+            ArrangementLocationMode.ROUTE -> listOf(
+                JourneyLocationTarget(JourneyLocationRole.ORIGIN, cleanLocationName(originName), originAddress),
+                JourneyLocationTarget(JourneyLocationRole.DESTINATION, cleanLocationName(destinationName), destinationAddress)
+            ).filter { it.displayName.isNotBlank() }
+        }
+    val primaryNavigationTarget get() = locationTargets.firstOrNull { it.role == JourneyLocationRole.DESTINATION } ?: locationTargets.firstOrNull()
+    val locationSummary get() = locationTargets.joinToString(" → ") { it.displayName }
+}
 
 @Serializable
 data class StoryDay(
@@ -129,6 +220,10 @@ data class TravelStory(
     val summary: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val sourceTripId: String? = null,
+    val coverMedia: MediaReference? = null,
+    val coverZoom: Double = 1.0,
+    val coverOffsetX: Double = 0.0,
+    val coverOffsetY: Double = 0.0,
     val days: List<StoryDay> = emptyList(),
 )
 
@@ -137,6 +232,7 @@ data class AppData(
     val formatVersion: Int = 1,
     val trips: List<Trip> = emptyList(),
     val stories: List<TravelStory> = emptyList(),
+    val favorites: List<ItineraryItem> = emptyList(),
 )
 
 enum class TripPhase { CURRENT, UPCOMING, HISTORY }
@@ -174,3 +270,15 @@ fun combineDateAndTime(day: Long, text: String): Long? = runCatching {
     val pieces = text.trim().split(":")
     day.localDate().atTime(pieces[0].toInt(), pieces[1].toInt()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 }.getOrNull()
+
+fun cleanLocationName(value: String): String {
+    var result = value.trim()
+    listOf("集合于", "游览", "参观", "打卡", "入住", "前往", "抵达", "到达").firstOrNull {
+        result.startsWith(it) && result.length > it.length + 1
+    }?.let { result = result.removePrefix(it).trim() }
+    listOf("前往", "抵达", "到达", "去往").forEach { marker ->
+        val suffix = result.substringAfterLast(marker, "").trim()
+        if (suffix.length >= 2) result = suffix
+    }
+    return result.ifBlank { value.trim() }
+}

@@ -21,7 +21,7 @@ class TripBackupService(private val context: Context) {
             zip.putNextEntry(ZipEntry("triptrail-data.json"))
             zip.write(json.encodeToString(data).toByteArray())
             zip.closeEntry()
-            allMedia(data).distinctBy { it.id }.forEach { media ->
+            data.backupMediaReferences().distinctBy { it.id }.forEach { media ->
                 openMedia(media.localUri)?.use { input ->
                     val suffix = Uri.parse(media.localUri).lastPathSegment?.substringAfterLast('.', "bin") ?: "bin"
                     zip.putNextEntry(ZipEntry("media/${media.id}.$suffix"))
@@ -65,16 +65,20 @@ class TripBackupService(private val context: Context) {
         return if (uri.scheme == "file") uri.path?.let { File(it).takeIf(File::exists)?.inputStream() } else context.contentResolver.openInputStream(uri)
     }
 
-    private fun allMedia(data: AppData): List<MediaReference> =
-        data.trips.flatMap { it.days }.flatMap { it.items }.flatMap { it.media } +
-            data.stories.flatMap { it.days }.flatMap { it.entries }.flatMap { it.media }
-
     private fun AppData.remapMedia(map: Map<String, String>) = copy(
         trips = trips.map { trip -> trip.copy(days = trip.days.map { day -> day.copy(items = day.items.map { item ->
             item.copy(media = item.media.map { media -> map[media.id]?.let { media.copy(localUri = it) } ?: media })
         }) }) },
-        stories = stories.map { story -> story.copy(days = story.days.map { day -> day.copy(entries = day.entries.map { entry ->
+        stories = stories.map { story -> story.copy(
+            coverMedia = story.coverMedia?.let { media -> map[media.id]?.let { media.copy(localUri = it) } ?: media },
+            days = story.days.map { day -> day.copy(entries = day.entries.map { entry ->
             entry.copy(media = entry.media.map { media -> map[media.id]?.let { media.copy(localUri = it) } ?: media })
-        }) }) }
+        }) }) },
+        favorites = favorites.map { favorite -> favorite.copy(media = favorite.media.map { media -> map[media.id]?.let { media.copy(localUri = it) } ?: media }) }
     )
 }
+
+internal fun AppData.backupMediaReferences(): List<MediaReference> =
+    trips.flatMap { it.days }.flatMap { it.items }.flatMap { it.media } +
+        stories.flatMap { it.days }.flatMap { it.entries }.flatMap { it.media } +
+        stories.mapNotNull { it.coverMedia } + favorites.flatMap { it.media }
