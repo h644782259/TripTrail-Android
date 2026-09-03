@@ -235,6 +235,35 @@ data class AppData(
     val favorites: List<ItineraryItem> = emptyList(),
 )
 
+/** Editable preview payload produced by a multi-day smart import. */
+data class RecognizedJourneyDay(
+    val sourceDayNumber: Int,
+    val date: Long?,
+    val title: String,
+    val note: String,
+    val items: List<ItineraryItem>,
+)
+
+/** A time slot captured before an itinerary reorder. */
+data class ItineraryTimeSlot(
+    val startMinute: Int,
+    val durationMillis: Long,
+)
+
+/** A suggested time for an item whose duration does not fit its new slot. */
+data class ItineraryTimeAdjustment(
+    val item: ItineraryItem,
+    val suggestedStartTime: Long,
+    val suggestedEndTime: Long,
+)
+
+data class ItineraryMoveResult(
+    val didMove: Boolean,
+    val timeAdjustments: List<ItineraryTimeAdjustment> = emptyList(),
+) {
+    companion object { val UNCHANGED = ItineraryMoveResult(false) }
+}
+
 enum class TripPhase { CURRENT, UPCOMING, HISTORY }
 
 fun Trip.phase(now: Long = System.currentTimeMillis()): TripPhase {

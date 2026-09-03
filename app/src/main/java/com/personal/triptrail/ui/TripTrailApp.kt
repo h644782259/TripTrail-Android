@@ -61,7 +61,13 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?) {
             tab == RootTab.TRIPS -> TripsScreen(repository, data.trips, modifier = contentModifier) { tripId = it }
             tab == RootTab.STORIES -> StoriesScreen(repository, data.stories, data.trips, modifier = contentModifier) { storyId = it }
             tab == RootTab.FAVORITES -> FavoritesScreen(repository, data.favorites, modifier = contentModifier)
-            else -> SettingsScreen(repository, data, modifier = contentModifier, onOpenStatistics = { showsStatistics = true })
+            else -> SettingsScreen(
+                repository,
+                data,
+                modifier = contentModifier,
+                onOpenStatistics = { showsStatistics = true },
+                onOpenTrips = { tab = RootTab.TRIPS; tripId = null; storyId = null; showsStatistics = false },
+            )
         }
     }
 

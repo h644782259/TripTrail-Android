@@ -27,6 +27,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.personal.triptrail.data.*
+import com.personal.triptrail.util.SystemImagePickerContract
+import com.personal.triptrail.util.SmartRecognitionResult
+import com.personal.triptrail.util.ZhipuRecognitionService
+import kotlinx.coroutines.launch
 
 @Composable
 fun FavoritesScreen(repository: TripRepository, favorites: List<ItineraryItem>, modifier: Modifier = Modifier) {
@@ -34,6 +38,8 @@ fun FavoritesScreen(repository: TripRepository, favorites: List<ItineraryItem>, 
     var category by remember { mutableStateOf<PlaceCategory?>(null) }
     var editing by remember { mutableStateOf<ItineraryItem?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var smartDraft by remember { mutableStateOf<ItineraryItem?>(null) }
+    var smartTarget by remember { mutableStateOf<ItineraryItem?>(null) }
     var deleting by remember { mutableStateOf<ItineraryItem?>(null) }
     val filtered = remember(favorites, search, category) {
         favorites.filter { favorite ->
@@ -48,7 +54,7 @@ fun FavoritesScreen(repository: TripRepository, favorites: List<ItineraryItem>, 
         } else {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.End) {
-                    TripRoundAction(Icons.Default.Add, "新建收藏") { creating = true }
+                    TripRoundAction(Icons.Default.Add, "新建收藏") { smartDraft = null; creating = true }
                 }
                 TripSearchField(search, "搜索名称、地点或备注", { search = it }, Modifier.padding(horizontal = 16.dp))
                 FavoriteFilterBar(favorites.size, category, { category = it }, Modifier.padding(16.dp, 14.dp, 16.dp, 12.dp))
@@ -79,15 +85,26 @@ fun FavoritesScreen(repository: TripRepository, favorites: List<ItineraryItem>, 
 
     if (creating) FavoriteEditorDialog(
         repository = repository,
-        original = ItineraryItem(isFavorite = true),
-        isNew = true,
-        onDismiss = { creating = false },
-        onSave = { repository.saveFavorite(it); creating = false },
+        original = smartDraft ?: ItineraryItem(isFavorite = true),
+        isNew = smartDraft == null,
+        onDismiss = { creating = false; smartDraft = null },
+        onSmartImport = { target -> creating = false; editing = null; smartTarget = target },
+        onSave = { repository.saveFavorite(it); creating = false; smartDraft = null },
     )
-    editing?.let { favorite -> FavoriteEditorDialog(repository, favorite, false, { editing = null }) { repository.saveFavorite(it); editing = null } }
+    editing?.let { favorite -> FavoriteEditorDialog(repository, favorite, false, { editing = null }, { target -> editing = null; smartTarget = target }) { repository.saveFavorite(it); editing = null } }
     deleting?.let { favorite -> ConfirmDeleteDialog(
         "删除收藏？", "“${favorite.title}”将从收藏中删除，已导入旅程的安排不受影响。", { deleting = null }
     ) { repository.deleteFavorite(favorite.id); deleting = null } }
+    smartTarget?.let { target ->
+        FavoriteSmartDialog(
+            onDismiss = { smartTarget = null },
+            onRecognized = { result ->
+                smartTarget = null
+                smartDraft = result.item.copy(id = target.id, isFavorite = true, favoriteCreatedAt = target.favoriteCreatedAt, media = target.media)
+                creating = true
+            },
+        )
+    }
 }
 
 @Composable
@@ -171,7 +188,7 @@ private fun FavoriteCard(favorite: ItineraryItem, onEdit: () -> Unit, onDelete: 
 }
 
 @Composable
-private fun FavoriteEditorDialog(repository: TripRepository, original: ItineraryItem, isNew: Boolean, onDismiss: () -> Unit, onSave: (ItineraryItem) -> Unit) {
+private fun FavoriteEditorDialog(repository: TripRepository, original: ItineraryItem, isNew: Boolean, onDismiss: () -> Unit, onSmartImport: (ItineraryItem) -> Unit = {}, onSave: (ItineraryItem) -> Unit) {
     var title by remember(original.id) { mutableStateOf(original.title) }
     var category by remember(original.id) { mutableStateOf(original.category) }
     var mode by remember(original.id) { mutableStateOf(original.locationMode) }
@@ -187,7 +204,7 @@ private fun FavoriteEditorDialog(repository: TripRepository, original: Itinerary
     var cost by remember(original.id) { mutableStateOf(if (original.cost == 0.0) "" else original.cost.toString()) }
     var media by remember(original.id) { mutableStateOf(original.media) }
     val context = LocalContext.current
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
+    val picker = rememberLauncherForActivityResult(SystemImagePickerContract(multiple = true, allowImagesAndVideos = true)) { uris ->
         media = media + uris.take((20 - media.size).coerceAtLeast(0)).mapNotNull { uri ->
             runCatching { repository.importMedia(uri, if (context.contentResolver.getType(uri)?.startsWith("video") == true) MediaKind.VIDEO else MediaKind.IMAGE) }.getOrNull()
         }
@@ -198,7 +215,10 @@ private fun FavoriteEditorDialog(repository: TripRepository, original: Itinerary
         containerColor = TripSurface,
         title = { Text(if (isNew) "新建收藏" else "编辑收藏") },
         text = { Column(Modifier.heightIn(max = 620.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            TripFormField(title, { title = it }, "名称")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TripFormField(title, { title = it }, "名称", Modifier.weight(1f))
+                IconButton(onClick = { onSmartImport(original) }) { Icon(Icons.Default.AutoAwesome, "智能录入", tint = TripLakeText) }
+            }
             Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PlaceCategory.entries.forEach { item -> FilterChip(category == item, { category = item }, { Text(item.label) }, leadingIcon = { Icon(item.icon(), null, Modifier.size(16.dp)) }) }
             }
@@ -218,10 +238,74 @@ private fun FavoriteEditorDialog(repository: TripRepository, original: Itinerary
             TripFormField(distance, { distance = it }, "交通或距离")
             TripFormField(cost, { cost = it }, "预算", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
             if (media.isNotEmpty()) MediaStrip(media) { id -> media = media.filterNot { it.id == id } }
-            OutlinedButton(onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(6.dp)); Text("从系统相簿选择（${media.size}/20）") }
+            OutlinedButton(onClick = { picker.launch(Unit) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(6.dp)); Text("从系统相簿选择（${media.size}/20）") }
         } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         confirmButton = { Button(onClick = { onSave(original.copy(title = title.trim(), category = category, locationMode = mode, placeName = place.trim(), placeAddress = address.trim(), address = address.trim(), originName = origin.trim(), originAddress = originAddress.trim(), destinationName = destination.trim(), destinationAddress = destinationAddress.trim(), note = note.trim(), transport = transport, distanceText = distance.trim(), cost = cost.toDoubleOrNull() ?: 0.0, media = media, isFavorite = true)) }, enabled = title.isNotBlank()) { Text("保存") } },
+    )
+}
+
+@Composable
+private fun FavoriteSmartDialog(onDismiss: () -> Unit, onRecognized: (SmartRecognitionResult) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    var recognizing by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var fallbackResult by remember { mutableStateOf<SmartRecognitionResult?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val picker = rememberLauncherForActivityResult(SystemImagePickerContract()) { uris ->
+        if (uris.isNotEmpty()) {
+            scope.launch {
+                runCatching { recognizeScreenshotText(context, uris) }
+                    .onSuccess { extracted -> if (extracted.isBlank()) error = "没有识别到图片文字" else text = extracted }
+                    .onFailure { error = it.localizedMessage ?: "图片读取失败" }
+            }
+        }
+    }
+    fun recognize() {
+        recognizing = true; error = null; fallbackResult = null
+        scope.launch {
+            runCatching { ZhipuRecognitionService.recognizeSingleItemText(context, text, System.currentTimeMillis(), System.currentTimeMillis()) }
+                .onSuccess { result ->
+                    if (result.fallbackMessage != null) fallbackResult = result else onRecognized(result)
+                }
+                .onFailure { error = it.localizedMessage ?: "识别失败" }
+            recognizing = false
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = TripSurface,
+        title = { Text("智能录入收藏") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("请输入一个地点或收藏内容，智能录入只会生成 1 个收藏。", color = TripInk)
+                TripFormField(text, { text = it }, "地点或安排文字", minLines = 5, singleLine = false)
+                OutlinedButton(onClick = { picker.launch(Unit) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.PhotoLibrary, null); Spacer(Modifier.width(6.dp)); Text("从系统相簿识别") }
+                fallbackResult?.let { result ->
+                    Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFFFFF3E0)) {
+                        Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(result.fallbackMessage.orEmpty(), color = Color(0xFF8A4B08), style = MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = ::recognize, enabled = !recognizing) { Text("重试大模型") }
+                                TextButton(onClick = { onRecognized(result) }, enabled = !recognizing) { Text("使用本地结果") }
+                            }
+                        }
+                    }
+                }
+                error?.let { notice ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(notice, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = ::recognize, enabled = !recognizing && text.isNotBlank()) { Text("重试") }
+                    }
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !recognizing) { Text("取消") } },
+        confirmButton = {
+            Button(onClick = ::recognize, enabled = text.isNotBlank() && !recognizing) { Text(if (recognizing) "识别中…" else "识别并预填") }
+        },
     )
 }
 

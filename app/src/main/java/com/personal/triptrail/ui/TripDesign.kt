@@ -6,6 +6,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.snapping.SnapPosition
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -16,6 +21,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,13 +33,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.window.Dialog
 import com.personal.triptrail.data.dateText
+import com.personal.triptrail.data.chineseDateText
 import com.personal.triptrail.data.localDate
 import com.personal.triptrail.data.timeText
 import com.personal.triptrail.data.PlaceCategory
 import com.personal.triptrail.data.combineDateAndTime
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.math.abs
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 enum class RootTab(val label: String, val icon: ImageVector) {
     TRIPS("旅程", Icons.Default.Map),
@@ -158,7 +169,19 @@ fun TripDateField(value: Long, label: String, onValueChange: (Long) -> Unit, mod
             },
             dismissButton = { TextButton(onClick = { showing = false }) { Text("取消") } },
             shape = RoundedCornerShape(28.dp),
-        ) { DatePicker(state = state, showModeToggle = false) }
+        ) {
+            DatePicker(
+                state = state,
+                showModeToggle = false,
+                title = {
+                    Text(label, Modifier.fillMaxWidth().padding(horizontal = 24.dp), style = MaterialTheme.typography.labelLarge, color = TripLakeText)
+                },
+                headline = {
+                    Text(value.chineseDateText(), Modifier.fillMaxWidth().padding(horizontal = 24.dp), style = MaterialTheme.typography.titleLarge, color = TripInk, maxLines = 1)
+                },
+                colors = DatePickerDefaults.colors(containerColor = TripSurface),
+            )
+        }
     }
 }
 
@@ -178,14 +201,15 @@ fun TripTimeField(value: Long, label: String, onValueChange: (Long) -> Unit, mod
         Box(Modifier.matchParentSize().clickable { showing = true })
     }
     if (showing) {
-        val state = rememberTimePickerState(initialHour = zoned.hour, initialMinute = zoned.minute, is24Hour = true)
+        var hour by remember(value) { mutableStateOf(zoned.hour) }
+        var minute by remember(value) { mutableStateOf(zoned.minute) }
         AlertDialog(
             onDismissRequest = { showing = false },
             title = { Text(label) },
-            text = { Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state) } },
+            text = { WheelTimePicker(hour, minute, { hour = it }, { minute = it }) },
             confirmButton = {
                 TextButton(onClick = {
-                    onValueChange(local.atTime(state.hour, state.minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
+                    onValueChange(local.atTime(hour, minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
                     showing = false
                 }) { Text("确定") }
             },
@@ -199,9 +223,19 @@ fun TripTimeField(value: Long, label: String, onValueChange: (Long) -> Unit, mod
 @Composable
 fun TripDateRangeField(start: Long, end: Long, onChange: (Long, Long) -> Unit) {
     var showing by remember { mutableStateOf(false) }
-    OutlinedButton(onClick = { showing = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp)) {
-        Icon(Icons.Default.DateRange, null, tint = TripLakeText); Spacer(Modifier.width(8.dp))
-        Text("${start.dateText()} — ${end.dateText()}", Modifier.weight(1f))
+    OutlinedButton(
+        onClick = { showing = true },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+        shape = RoundedCornerShape(17.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Icon(Icons.Default.DateRange, null, tint = TripLakeText)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("日期范围", style = MaterialTheme.typography.labelSmall, color = TripLakeText)
+            Text("${start.dateText()} — ${end.dateText()}", style = MaterialTheme.typography.bodyLarge, color = TripInk, maxLines = 1)
+        }
+        Icon(Icons.Default.KeyboardArrowDown, "选择日期范围", tint = TripLakeText)
     }
     if (showing) {
         val state = rememberDateRangePickerState(
@@ -217,7 +251,33 @@ fun TripDateRangeField(start: Long, end: Long, onChange: (Long, Long) -> Unit) {
                 ); showing = false
             }) { Text("确定") }
         }, dismissButton = { TextButton(onClick = { showing = false }) { Text("取消") } }) {
-            DateRangePicker(state = state, showModeToggle = false)
+            DateRangePicker(
+                state = state,
+                modifier = Modifier.padding(horizontal = 8.dp),
+                showModeToggle = false,
+                title = {
+                    Text("选择日期范围", Modifier.fillMaxWidth().padding(horizontal = 24.dp), style = MaterialTheme.typography.labelLarge, color = TripLakeText)
+                },
+                headline = {
+                    val selectedStart = state.selectedStartDateMillis?.let { LocalDate.ofEpochDay(it / 86_400_000L).let { date -> "${date.monthValue}月${date.dayOfMonth}日" } }
+                    val selectedEnd = state.selectedEndDateMillis?.let { LocalDate.ofEpochDay(it / 86_400_000L).let { date -> "${date.monthValue}月${date.dayOfMonth}日" } }
+                    val headlineText = when {
+                        selectedStart != null && selectedEnd != null -> "$selectedStart — $selectedEnd"
+                        selectedStart != null -> "$selectedStart — 请选择结束日期"
+                        else -> "请选择开始日期"
+                    }
+                    Text(
+                        headlineText,
+                        Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = TripInk,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        maxLines = 1,
+                    )
+                },
+                colors = DatePickerDefaults.colors(containerColor = TripSurface),
+            )
         }
     }
 }
@@ -231,31 +291,154 @@ fun TripTimeRangeField(start: Long, end: Long, onChange: (Long, Long) -> Unit) {
     if (showing) {
         val startZone = java.time.Instant.ofEpochMilli(start).atZone(ZoneId.systemDefault())
         val endZone = java.time.Instant.ofEpochMilli(end).atZone(ZoneId.systemDefault())
-        val startState = rememberTimePickerState(startZone.hour, startZone.minute, true)
-        val endState = rememberTimePickerState(endZone.hour, endZone.minute, true)
+        var startHour by remember(start) { mutableStateOf(startZone.hour) }
+        var startMinute by remember(start) { mutableStateOf(startZone.minute) }
+        var endHour by remember(end) { mutableStateOf(endZone.hour) }
+        var endMinute by remember(end) { mutableStateOf(endZone.minute) }
         AlertDialog(onDismissRequest = { showing = false }, title = { Text("选择起止时间") },
-            text = { Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("开始时间", style = MaterialTheme.typography.labelLarge, color = TripLakeText); TimeInput(startState)
-                Spacer(Modifier.height(8.dp)); Text("结束时间", style = MaterialTheme.typography.labelLarge, color = TripLakeText); TimeInput(endState)
-            } }, confirmButton = { TextButton(onClick = {
-                val date = start.localDate(); val s = date.atTime(startState.hour, startState.minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                var e = date.atTime(endState.hour, endState.minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            text = {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("开始时间", style = MaterialTheme.typography.labelLarge, color = TripLakeText)
+                        WheelTimePicker(startHour, startMinute, { startHour = it }, { startMinute = it })
+                    }
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("结束时间", style = MaterialTheme.typography.labelLarge, color = TripLakeText)
+                        WheelTimePicker(endHour, endMinute, { endHour = it }, { endMinute = it })
+                    }
+                }
+            }, confirmButton = { TextButton(onClick = {
+                val date = start.localDate(); val s = date.atTime(startHour, startMinute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                var e = date.atTime(endHour, endMinute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 if (e <= s) e += 86_400_000L
                 onChange(s, e); showing = false
             }) { Text("确定") } }, dismissButton = { TextButton(onClick = { showing = false }) { Text("取消") } })
     }
 }
 
+/** A touch-friendly 24-hour wheel used everywhere the app edits a time. */
+@Composable
+private fun WheelTimePicker(
+    hour: Int,
+    minute: Int,
+    onHourChange: (Int) -> Unit,
+    onMinuteChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        WheelNumberPicker(hour, 23, onHourChange, "小时")
+        Text(":", style = MaterialTheme.typography.headlineMedium, color = TripInk, modifier = Modifier.padding(horizontal = 8.dp))
+        WheelNumberPicker(minute, 59, onMinuteChange, "分钟")
+    }
+}
+
+@Composable
+private fun WheelNumberPicker(value: Int, maximum: Int, onValueChange: (Int) -> Unit, contentDescription: String) {
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = value.coerceIn(0, maximum))
+    val flingBehavior = rememberSnapFlingBehavior(state, SnapPosition.Center)
+    val values = remember(maximum) { (0..maximum).toList() }
+    LaunchedEffect(state) {
+        snapshotFlow {
+            val layout = state.layoutInfo
+            val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
+            layout.visibleItemsInfo.minByOrNull { info -> abs(info.offset + info.size / 2 - center) }?.index
+        }.distinctUntilChanged().collect { index ->
+            if (index != null) onValueChange(index.coerceIn(0, maximum))
+        }
+    }
+    LaunchedEffect(value) {
+        val target = value.coerceIn(0, maximum)
+        if (state.firstVisibleItemIndex != target || state.firstVisibleItemScrollOffset != 0) {
+            state.animateScrollToItem(target)
+        }
+    }
+    Box(
+        modifier = Modifier.width(56.dp).height(144.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        LazyColumn(
+            state = state,
+            flingBehavior = flingBehavior,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 48.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            items(values, key = { it }) { number ->
+                Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        number.toString().padStart(2, '0'),
+                        modifier = Modifier,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = if (number == value) TripInk else TripInk.copy(alpha = .30f),
+                    )
+                }
+            }
+        }
+        Box(
+            Modifier.fillMaxWidth().height(48.dp)
+                .background(TripLake.copy(alpha = .10f), RoundedCornerShape(10.dp)),
+        )
+        Text(contentDescription, style = MaterialTheme.typography.labelSmall, color = TripInk.copy(alpha = .58f), modifier = Modifier.align(Alignment.BottomCenter).offset(y = 18.dp))
+    }
+}
+
 @Composable
 fun OpenPlaceChooser(title: String, address: String, onDismiss: () -> Unit, onOpen: (String) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("打开地点") }, text = { Text("$title\n$address", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }, confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = { onOpen("高德地图") }) { Text("高德地图") }
-                TextButton(onClick = { onOpen("小红书") }) { Text("小红书") }
-                TextButton(onClick = { onOpen("抖音") }) { Text("抖音") }
+    val options = listOf(
+        Triple("高德地图", "地图中查看位置与路线", Icons.Default.Map),
+        Triple("小红书", "搜索地点相关内容", Icons.Default.Search),
+        Triple("抖音", "搜索地点相关视频", Icons.Default.PlayArrow),
+    )
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = TripSurface,
+            shadowElevation = 16.dp,
+        ) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = CircleShape, color = TripLake.copy(alpha = .14f)) {
+                        Icon(Icons.Default.Place, null, tint = TripLakeText, modifier = Modifier.padding(10.dp).size(22.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("打开地点", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TripInk)
+                        Text(title.ifBlank { "未命名地点" }, style = MaterialTheme.typography.bodyLarge, color = TripLakeText, maxLines = 1)
+                    }
+                }
+                if (address.isNotBlank()) {
+                    Text(address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+                }
+                options.forEach { (platform, detail, icon) ->
+                    Surface(
+                        onClick = { onOpen(platform) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = TripCanvas,
+                    ) {
+                        Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(icon, null, tint = TripLakeText, modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(platform, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = TripInk)
+                                Text(detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(Icons.Default.ChevronRight, null, tint = TripLakeText)
+                        }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("取消") }
             }
-        })
+        }
+    }
 }
 
 @Composable

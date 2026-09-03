@@ -37,4 +37,25 @@ class SmartImportParserTest {
         assertTrue(draft.distanceText.contains("4.4"))
         assertEquals("10:30", draft.startTime.timeText())
     }
+
+    @Test
+    fun parsesWholeJourneyIntoEveryDayAndArrangement() {
+        val reference = parseDate("2026-09-25")!!
+        val days = SmartImportParser.parseJourney(
+            """Day 1 抵达杭州
+                |09:00–10:00 抵达杭州东站
+                |地点：杭州东站
+                |14:00–15:00 入住湖滨酒店
+                |地点：湖滨酒店
+                |
+                |Day 2 西湖环线
+                |08:00–09:30 游览断桥残雪
+                |11:30–13:00 楼外楼用餐
+            """.trimMargin(), reference
+        )
+        assertEquals(2, days.size)
+        assertEquals(2, days[0].items.size)
+        assertEquals(2, days[1].items.size)
+        assertEquals("游览断桥残雪", days[1].items[0].title)
+    }
 }

@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.triptrail.data.*
+import com.personal.triptrail.util.SystemImagePickerContract
 import com.personal.triptrail.util.ExternalApps
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -141,7 +142,8 @@ fun StoryDetailScreen(repository: TripRepository, storyId: String, modifier: Mod
     val scope = rememberCoroutineScope()
     val orderedDays = story.days.sortedBy { it.sortOrder }
     var selectedDayId by rememberSaveable(storyId) { mutableStateOf(orderedDays.firstOrNull()?.id) }
-    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    val coverPicker = rememberLauncherForActivityResult(SystemImagePickerContract()) { uris ->
+        val uri = uris.firstOrNull()
         if (uri != null) runCatching { repository.importMedia(uri, MediaKind.IMAGE) }
             .onSuccess { repository.updateStory(story.copy(coverMedia = it, coverZoom = 1.0, coverOffsetX = 0.0, coverOffsetY = 0.0)) }
             .onFailure { message = "无法读取封面图片：${it.localizedMessage}" }
@@ -191,7 +193,7 @@ fun StoryDetailScreen(repository: TripRepository, storyId: String, modifier: Mod
                     Box {
                         StoryCover(story) { coverMenu = true }
                         TripDropdownMenu(coverMenu, { coverMenu = false }) {
-                            DropdownMenuItem({ Text(if (story.coverMedia == null) "选择封面" else "更换封面") }, { coverMenu = false; coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) })
+                            DropdownMenuItem({ Text(if (story.coverMedia == null) "选择封面" else "更换封面") }, { coverMenu = false; coverPicker.launch(Unit) }, leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) })
                             if (story.coverMedia != null) DropdownMenuItem({ Text("移除封面") }, { coverMenu = false; repository.updateStory(story.copy(coverMedia = null, coverZoom = 1.0, coverOffsetX = 0.0, coverOffsetY = 0.0)) }, leadingIcon = { Icon(Icons.Default.HideImage, null) })
                         }
                     }
@@ -337,7 +339,7 @@ private fun StoryEntryEditor(repository: TripRepository, original: StoryEntry, o
     var cost by remember(original.id) { mutableStateOf(if (original.cost == 0.0) "" else original.cost.toString()) }
     var media by remember(original.id) { mutableStateOf(original.media) }
     val context = LocalContext.current
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(9)) { uris ->
+    val picker = rememberLauncherForActivityResult(SystemImagePickerContract(multiple = true, allowImagesAndVideos = true)) { uris ->
         media = media + uris.take((9 - media.size).coerceAtLeast(0)).mapNotNull { uri ->
             runCatching { repository.importMedia(uri, if (context.contentResolver.getType(uri)?.startsWith("video") == true) MediaKind.VIDEO else MediaKind.IMAGE) }.getOrNull()
         }
@@ -368,7 +370,7 @@ private fun StoryEntryEditor(repository: TripRepository, original: StoryEntry, o
                 TripFormField(cost, { cost = it }, "实际花费", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 TripFormField(note, { note = it }, "当时的感受与记录", minLines = 4, singleLine = false)
                 if (media.isNotEmpty()) MediaStrip(media) { id -> media = media.filterNot { it.id == id } }
-                OutlinedButton(onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(6.dp)); Text("添加照片或视频（${media.size}/9）") }
+                OutlinedButton(onClick = { picker.launch(Unit) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(6.dp)); Text("添加照片或视频（${media.size}/9）") }
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },

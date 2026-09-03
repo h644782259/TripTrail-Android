@@ -40,7 +40,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun SettingsScreen(repository: TripRepository, data: AppData, modifier: Modifier = Modifier, onOpenStatistics: () -> Unit) {
+fun SettingsScreen(
+    repository: TripRepository,
+    data: AppData,
+    modifier: Modifier = Modifier,
+    onOpenStatistics: () -> Unit,
+    onOpenTrips: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recognitionSettings = remember { SecureRecognitionSettings(context) }
@@ -78,7 +84,18 @@ fun SettingsScreen(repository: TripRepository, data: AppData, modifier: Modifier
         contentPadding = PaddingValues(16.dp, 18.dp, 16.dp, 112.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        item { SettingsGroup("开始体验") { SettingsRow(Icons.Default.AutoAwesome, "添加示例旅程", tint = TripLakeText) { repository.addSampleData(); message = if (data.trips.isEmpty()) "示例旅程已添加。" else "已有旅程，未重复添加示例。" } } }
+        item {
+            SettingsGroup("开始体验") {
+                SettingsRow(Icons.Default.AutoAwesome, "添加示例旅程", tint = TripLakeText) {
+                    if (repository.addSampleData()) {
+                        message = "示例旅程已添加。"
+                        onOpenTrips()
+                    } else {
+                        message = "示例内容已经存在，没有重复添加。"
+                    }
+                }
+            }
+        }
         item { SettingsGroup("旅行概览") { SettingsRow(Icons.Default.BarChart, "旅行统计", tint = TripLakeText, trailing = { Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) }, action = onOpenStatistics) } }
         item { SettingsGroup("智能识别") {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text("使用大模型智能识别", Modifier.weight(1f)); Switch(smartEnabled, { checked -> smartEnabled = checked; recognitionSettings.enabled = checked }) }
