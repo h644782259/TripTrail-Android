@@ -83,6 +83,7 @@ data class ItineraryItem(
     val isCompleted: Boolean = false,
     val executionStatus: ItineraryExecutionStatus = if (isCompleted) ItineraryExecutionStatus.COMPLETED else ItineraryExecutionStatus.NOT_STARTED,
     val isAutomaticCompletionOverridden: Boolean = false,
+    val isFixedTime: Boolean = false,
     val sortOrder: Int = 0,
     val isFavorite: Boolean = false,
     val favoriteCreatedAt: Long = System.currentTimeMillis(),

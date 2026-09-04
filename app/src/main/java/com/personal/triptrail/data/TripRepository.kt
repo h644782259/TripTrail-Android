@@ -17,12 +17,12 @@ class TripRepository(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
     private val dataFile = File(context.filesDir, "triptrail-data.json")
     private val mediaDirectory = File(context.filesDir, "media").apply { mkdirs() }
-    private val _data = MutableStateFlow(load().autoCompleteElapsed())
+    private val _data = MutableStateFlow(normalizeSchedules(load()).autoCompleteElapsed())
     val data: StateFlow<AppData> = _data.asStateFlow()
 
     @Synchronized
     private fun mutate(block: (AppData) -> AppData) {
-        val updated = block(_data.value).autoCompleteElapsed()
+        val updated = normalizeSchedules(block(_data.value)).autoCompleteElapsed()
         _data.value = updated
         val temporary = File(dataFile.parentFile, "${dataFile.name}.tmp")
         temporary.writeText(json.encodeToString(updated))
@@ -134,7 +134,7 @@ class TripRepository(private val context: Context) {
                     sortOrder = if (exists) item.sortOrder else day.items.size,
                     isAutomaticCompletionOverridden = false,
                 ).withAutomaticExecutionStatus()
-                day.copy(items = if (exists) day.items.map { if (it.id == item.id) normalized else it } else day.items + normalized)
+                day.copy(items = (if (exists) day.items.map { if (it.id == item.id) normalized else it } else day.items + normalized).normalizeItems())
             }
         })
     }) }
@@ -221,27 +221,14 @@ class TripRepository(private val context: Context) {
 
                     val slots = original.map(::timeSlot)
                     val reordered = original.toMutableList().apply { add(to, removeAt(from)) }
-                    val affected = reordered.indices.filter { reordered[it].id != original[it].id }
-                    val durationsMatch = affected.all { index ->
-                        abs(durationOf(reordered[index]) - slots[index].durationMillis) <= 1_000L
-                    }
-                    val adjustments = if (durationsMatch) {
-                        emptyList()
-                    } else {
-                        affected.mapNotNull { index ->
-                            suggestedRange(index, slots, day.date)?.let { range ->
-                                ItineraryTimeAdjustment(reordered[index], range.first, range.second)
-                            }
-                        }
-                    }
                     val updatedItems = reordered.mapIndexed { index, item ->
-                        if (durationsMatch && index in affected) {
+                        if (item.isFixedTime) item else {
                             val slot = slots[index]
                             val start = slotStart(day.date, slot)
-                            item.copy(startTime = start, endTime = start + slot.durationMillis)
-                        } else item.copy(sortOrder = index)
-                    }.mapIndexed { index, item -> item.copy(sortOrder = index) }
-                    result = ItineraryMoveResult(true, adjustments)
+                            item.copy(startTime = start, endTime = start + durationOf(item).coerceAtLeast(60_000L))
+                        }
+                    }.mapIndexed { index, item -> item.copy(sortOrder = index) }.normalizeItems()
+                    result = ItineraryMoveResult(true, emptyList())
                     day.copy(items = updatedItems)
                 })
             })
@@ -267,6 +254,17 @@ class TripRepository(private val context: Context) {
     }
 
     private fun durationOf(item: ItineraryItem): Long = (item.endTime - item.startTime).coerceAtLeast(0L)
+
+    private fun List<ItineraryItem>.normalizeItems(): List<ItineraryItem> =
+        sortedWith(compareBy<ItineraryItem> { it.startTime }.thenBy { it.id })
+            .mapIndexed { index, item ->
+                val safeEnd = maxOf(item.endTime, item.startTime + 60_000L)
+                item.copy(endTime = safeEnd, sortOrder = index)
+            }
+
+    private fun normalizeSchedules(data: AppData): AppData = data.copy(
+        trips = data.trips.map { trip -> trip.copy(days = trip.days.map { day -> day.copy(items = day.items.normalizeItems()) }) }
+    )
 
     private fun slotStart(dayDate: Long, slot: ItineraryTimeSlot): Long {
         val date = dayDate.localDate()

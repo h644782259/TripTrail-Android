@@ -118,7 +118,7 @@ object TripFileService {
         put("originName", item.originName); put("originAddress", item.originAddress); put("destinationName", item.destinationName); put("destinationAddress", item.destinationAddress)
         put("transportRaw", item.transport.label); put("distanceText", item.distanceText)
         put("playDurationMinutes", item.playDurationMinutes); put("reservationInfo", item.reservationInfo); put("cost", item.cost)
-        put("isCompleted", item.isCompleted); put("executionStatusRaw", item.executionStatus.name.lowercase()); put("isAutomaticCompletionOverridden", item.isAutomaticCompletionOverridden); put("sortOrder", item.sortOrder)
+        put("isCompleted", item.isCompleted); put("executionStatusRaw", item.executionStatus.name.lowercase()); put("isAutomaticCompletionOverridden", item.isAutomaticCompletionOverridden); put("isFixedTime", item.isFixedTime); put("sortOrder", item.sortOrder)
         put("isFavorite", item.isFavorite); put("favoriteCreatedAt", Instant.ofEpochMilli(item.favoriteCreatedAt).toString()); put("sourceFavoriteID", item.sourceFavoriteId ?: JSONObject.NULL)
         put("media", JSONArray(if (includeLocalUris) item.media.map(::mediaJson) else emptyList<JSONObject>()))
     }
@@ -177,7 +177,7 @@ object TripFileService {
         transport = transportMode(obj.stringFrom("transportRaw", "transport")), distanceText = obj.optString("distanceText"), playDurationMinutes = obj.optInt("playDurationMinutes", 60),
         reservationInfo = obj.optString("reservationInfo"), cost = obj.optDouble("cost", 0.0), isCompleted = obj.optBoolean("isCompleted"),
         executionStatus = executionStatus(obj.stringFrom("executionStatusRaw", "executionStatus"), obj.optBoolean("isCompleted")),
-        isAutomaticCompletionOverridden = obj.optBoolean("isAutomaticCompletionOverridden"), sortOrder = obj.optInt("sortOrder"), isFavorite = obj.optBoolean("isFavorite"),
+        isAutomaticCompletionOverridden = obj.optBoolean("isAutomaticCompletionOverridden"), isFixedTime = obj.optBoolean("isFixedTime"), sortOrder = obj.optInt("sortOrder"), isFavorite = obj.optBoolean("isFavorite"),
         favoriteCreatedAt = obj.dateOrNull("favoriteCreatedAt") ?: System.currentTimeMillis(),
         sourceFavoriteId = obj.optionalString("sourceFavoriteID") ?: obj.optionalString("sourceFavoriteId"),
         media = obj.optJSONArray("media")?.objects()?.map(::parseMedia).orEmpty(),

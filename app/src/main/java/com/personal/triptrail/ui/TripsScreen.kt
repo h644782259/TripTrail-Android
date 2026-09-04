@@ -969,6 +969,7 @@ private fun ArrangementEditorDialog(repository: TripRepository, day: TripDay, or
     var destination by remember(original.id) { mutableStateOf(original.destinationName) }; var destinationAddress by remember(original.id) { mutableStateOf(original.destinationAddress) }
     var note by remember(original.id) { mutableStateOf(original.note) }; var reservation by remember(original.id) { mutableStateOf(original.reservationInfo) }; var distance by remember(original.id) { mutableStateOf(original.distanceText) }
     var cost by remember(original.id) { mutableStateOf(if (original.cost == 0.0) "" else original.cost.toString()) }; var media by remember(original.id) { mutableStateOf(original.media) }
+    var isFixedTime by remember(original.id) { mutableStateOf(original.isFixedTime) }
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(SystemImagePickerContract(multiple = true, allowImagesAndVideos = true)) { uris -> media = media + uris.take((9 - media.size).coerceAtLeast(0)).mapNotNull { uri -> runCatching { repository.importMedia(uri, if (context.contentResolver.getType(uri)?.startsWith("video") == true) MediaKind.VIDEO else MediaKind.IMAGE) }.getOrNull() } }
     AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(28.dp), containerColor = TripSurface, title = { Text(if (original.title.isBlank()) "添加安排" else "编辑安排") },
@@ -977,6 +978,18 @@ private fun ArrangementEditorDialog(repository: TripRepository, day: TripDay, or
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { PlaceCategory.entries.forEach { item -> FilterChip(category == item, { category = item }, { Text(item.label) }, leadingIcon = { Icon(item.icon(), null, Modifier.size(16.dp)) }) } }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TripTimeRangeField(start, end) { selectedStart, selectedEnd -> start = selectedStart; end = selectedEnd }
+            }
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = isFixedTime, onCheckedChange = { isFixedTime = it })
+                    Text("固定时间", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    "开启后，排序或拖拽时不会自动调整此安排的时间",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 48.dp),
+                )
             }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { ArrangementLocationMode.entries.forEachIndexed { index, item -> SegmentedButton(selected = mode == item, onClick = { mode = item }, shape = SegmentedButtonDefaults.itemShape(index, ArrangementLocationMode.entries.size)) { Text(item.label) } } }
             if (mode == ArrangementLocationMode.SINGLE) {
@@ -988,7 +1001,7 @@ private fun ArrangementEditorDialog(repository: TripRepository, day: TripDay, or
             if (media.isNotEmpty()) MediaStrip(media) { id -> media = media.filterNot { it.id == id } }
             OutlinedButton(onClick = { picker.launch(Unit) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Spacer(Modifier.width(6.dp)); Text("添加照片或视频（${media.size}/9）") }
         } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        confirmButton = { Button(onClick = { save(original.copy(title = title.trim(), category = category, startTime = start, endTime = end, locationMode = mode, placeName = place.trim(), placeAddress = placeAddress.trim(), address = placeAddress.trim(), originName = origin.trim(), originAddress = originAddress.trim(), destinationName = destination.trim(), destinationAddress = destinationAddress.trim(), note = note.trim(), reservationInfo = reservation.trim(), distanceText = distance.trim(), cost = cost.toDoubleOrNull() ?: 0.0, isAutomaticCompletionOverridden = false, media = media).withAutomaticExecutionStatus()) }, enabled = title.isNotBlank() && end > start) { Text("保存") } })
+        confirmButton = { Button(onClick = { save(original.copy(title = title.trim(), category = category, startTime = start, endTime = maxOf(end, start + 60_000L), locationMode = mode, placeName = place.trim(), placeAddress = placeAddress.trim(), address = placeAddress.trim(), originName = origin.trim(), originAddress = originAddress.trim(), destinationName = destination.trim(), destinationAddress = destinationAddress.trim(), note = note.trim(), reservationInfo = reservation.trim(), distanceText = distance.trim(), cost = cost.toDoubleOrNull() ?: 0.0, isFixedTime = isFixedTime, isAutomaticCompletionOverridden = false, media = media).withAutomaticExecutionStatus()) }, enabled = title.isNotBlank() && end > start) { Text("保存") } })
 }
 
 @Composable
@@ -1046,6 +1059,25 @@ private fun SmartJourneyPreviewDialog(
                                     label = "安排 ${itemIndex + 1}",
                                 )
                                 Text("${item.startTime.timeText()} – ${item.endTime.timeText()}${item.locationSummary.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = item.isFixedTime,
+                                        onCheckedChange = { checked ->
+                                            days = days.mapIndexed { d, value ->
+                                                if (d == dayIndex) value.copy(items = value.items.mapIndexed { i, current ->
+                                                    if (i == itemIndex) current.copy(isFixedTime = checked) else current
+                                                }) else value
+                                            }
+                                        },
+                                    )
+                                    Text("固定时间", style = MaterialTheme.typography.bodyMedium)
+                                }
+                                Text(
+                                    "开启后，排序或拖拽时不会自动调整此安排的时间",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 48.dp),
+                                )
                             }
                         }
                     }
