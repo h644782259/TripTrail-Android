@@ -11,13 +11,14 @@ import androidx.activity.result.contract.ActivityResultContract
 class SystemImagePickerContract(
     private val multiple: Boolean = false,
     private val allowImagesAndVideos: Boolean = false,
+    private val maxSelectionCount: Int = 20,
 ) : ActivityResultContract<Unit, List<Uri>>() {
     override fun createIntent(context: Context, input: Unit): Intent {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Intent(MediaStore.ACTION_PICK_IMAGES).apply {
                 type = if (allowImagesAndVideos) "*/*" else "image/*"
                 if (multiple) {
-                    putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 20)
+                    putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, maxSelectionCount)
                     putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 }
             }
@@ -35,6 +36,6 @@ class SystemImagePickerContract(
             intent.data?.let(::add)
             intent.clipData?.let { clip -> (0 until clip.itemCount).mapTo(this) { clip.getItemAt(it).uri } }
         }
-        return values.distinct()
+        return values.distinct().take(maxSelectionCount)
     }
 }

@@ -1,5 +1,6 @@
 package com.personal.triptrail.util
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -59,15 +60,25 @@ data class SharePreviewData(
 
 object ShareExportService {
     fun shareImage(context: Context, data: SharePreviewData) {
-        val target = shareDirectory(context).resolve("${safeName(data.title)}-旅迹长图.png")
+        val target = shareDirectory(context).resolve("${safeName(data.title)}-旅迹长图-${java.util.UUID.randomUUID()}.jpg")
         val bitmap = renderImage(data)
-        target.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        bitmap.recycle()
-        share(context, target, "image/png", "分享精美长图")
+        try {
+            target.outputStream().use {
+                check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)) { "分享图生成失败，请稍后重试。" }
+            }
+        } finally {
+            bitmap.recycle()
+        }
+        share(context, target, "image/jpeg", "分享精美长图")
     }
 
     fun shareImportable(context: Context, title: String, content: String) {
-        val target = shareDirectory(context).resolve("${safeName(title)}.triptrail")
+        val kind = when (org.json.JSONObject(content).optString("kind")) {
+            "trip" -> "旅程"
+            "footprint" -> "足迹"
+            else -> "分享"
+        }
+        val target = shareDirectory(context).resolve("旅迹-${kind}-${safeName(title)}.triptrail")
         target.writeText(content)
         share(context, target, "application/vnd.triptrail.journey", "发送可导入内容")
     }
@@ -77,6 +88,7 @@ object ShareExportService {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = mime
             putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newUri(context.contentResolver, chooserTitle, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(Intent.createChooser(intent, chooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -87,11 +99,15 @@ object ShareExportService {
         val height = estimateHeight(data)
         val density = 3f
         val bitmap = Bitmap.createBitmap((width * density).toInt(), (height * density).toInt(), Bitmap.Config.ARGB_8888)
+        // JPEG has no alpha channel; start with an opaque paper canvas.
+        bitmap.eraseColor(PAPER_TOP)
         val canvas = Canvas(bitmap)
         canvas.scale(density, density)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
 
         drawCover(canvas, data, width, paint)
+        // Cover badges leave Paint.alpha at 65. Reset before drawing the paper.
+        paint.color = Color.WHITE
         paint.shader = LinearGradient(0f, 252f, 0f, height, PAPER_TOP, PAPER_BOTTOM, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 252f, width, height, paint)
         paint.shader = null
@@ -141,6 +157,7 @@ object ShareExportService {
             } else {
                 day.items.forEachIndexed { itemIndex, item ->
                     val itemHeight = estimateItemHeight(item)
+                    paint.color = Color.WHITE
                     paint.shader = LinearGradient(34f, innerY, 326f, innerY + itemHeight, ITEM_TOP, ITEM_BOTTOM, Shader.TileMode.CLAMP)
                     canvas.drawRoundRect(RectF(34f, innerY, 326f, innerY + itemHeight), 16f, 16f, paint)
                     paint.shader = null
@@ -183,6 +200,7 @@ object ShareExportService {
             drawCenterCrop(canvas, cover, rect, data.coverZoom.toFloat(), data.coverOffsetX.toFloat(), data.coverOffsetY.toFloat(), paint)
             cover.recycle()
         } else {
+            paint.color = Color.WHITE
             paint.shader = LinearGradient(0f, 0f, width, 252f, INK, LAKE, Shader.TileMode.CLAMP)
             canvas.drawRect(rect, paint)
             paint.shader = null
@@ -194,6 +212,7 @@ object ShareExportService {
             canvas.drawCircle(-34f, 220f, 72f, paint)
             paint.style = Paint.Style.FILL
         }
+        paint.color = Color.WHITE
         paint.shader = LinearGradient(0f, 0f, 0f, 252f, intArrayOf(Color.argb(20, 0, 0, 0), Color.TRANSPARENT, Color.argb(184, 0, 0, 0)), floatArrayOf(0f, .45f, 1f), Shader.TileMode.CLAMP)
         canvas.drawRect(rect, paint)
         paint.shader = null
@@ -274,6 +293,9 @@ object ShareExportService {
         val centerX = bitmap.width / 2f + maxX * offsetX.coerceIn(-1f, 1f)
         val centerY = bitmap.height / 2f + maxY * offsetY.coerceIn(-1f, 1f)
         val source = Rect((centerX - sourceWidth / 2).toInt(), (centerY - sourceHeight / 2).toInt(), (centerX + sourceWidth / 2).toInt(), (centerY + sourceHeight / 2).toInt())
+        // Media must not inherit opacity or shaders from borders and overlays.
+        paint.shader = null
+        paint.color = Color.WHITE
         canvas.drawBitmap(bitmap, source, dest, paint)
     }
 

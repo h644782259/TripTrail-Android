@@ -13,7 +13,6 @@ object SmartImportParser {
     private val timeRange = Regex("(?:^|\\s)([0-2]?\\d[:：][0-5]\\d)\\s*[-—–~至到]\\s*([0-2]?\\d[:：][0-5]\\d)")
     private val singleTime = Regex("(?:^|\\s)([0-2]?\\d[:：][0-5]\\d)")
     private val money = Regex("(?:¥|￥|金额|合计|实付|费用)\\s*[:：]?\\s*(\\d+(?:\\.\\d{1,2})?)")
-    private val distance = Regex("(\\d+(?:\\.\\d+)?\\s*(?:公里|km|KM|米)(?:\\s*[·•/]\\s*\\d+\\s*(?:分钟|min))?)")
     private val order = Regex("(?:订单号|订单编号|预订号|确认号)\\s*[:：]?\\s*([A-Za-z0-9-]+)")
     private val dayHeader = Regex("(?i)^(?:day\\s*(\\d+)|第\\s*(\\d+)\\s*天)\\s*[:：、.-]?\\s*(.*)$")
     private val dateOnly = Regex("^(?:(\\d{4})[-/年](\\d{1,2})[-/月](\\d{1,2})日?|(?:(\\d{1,2})月)?(\\d{1,2})日)$")
@@ -96,15 +95,7 @@ object SmartImportParser {
         val first = range?.groupValues?.getOrNull(1) ?: singleTime.find(joined)?.groupValues?.getOrNull(1)
         val second = range?.groupValues?.getOrNull(2)
         val start = first?.replace('：', ':')?.let { combineDateAndTime(targetDay, it) } ?: suggestedStart
-        val end = second?.replace('：', ':')?.let { combineDateAndTime(targetDay, it) } ?: start + if (category == PlaceCategory.HOTEL) 12 * 3_600_000 else 3_600_000
-        val transport = when {
-            listOf("步行", "步行导航").any(joined::contains) -> TransportMode.WALK
-            listOf("骑行", "骑车").any(joined::contains) -> TransportMode.RIDE
-            listOf("公交", "地铁").any(joined::contains) -> TransportMode.BUS
-            listOf("火车", "高铁", "列车").any(joined::contains) -> TransportMode.TRAIN
-            listOf("航班", "飞机").any(joined::contains) -> TransportMode.FLIGHT
-            else -> TransportMode.CAR
-        }
+        val end = second?.replace('：', ':')?.let { combineDateAndTime(targetDay, it) } ?: start + 3_600_000
         val reservationBits = buildList {
             order.find(joined)?.groupValues?.getOrNull(1)?.let { add("订单号：$it") }
             clean.firstOrNull { it.contains("房型") }?.let(::add)
@@ -112,8 +103,8 @@ object SmartImportParser {
         }
         return ItineraryItem(
             id = UUID.randomUUID().toString(), title = title, category = category, startTime = start,
-            endTime = maxOf(start + 60_000, end), address = inferAddress(clean), transport = transport,
-            distanceText = distance.find(joined)?.value.orEmpty(), playDurationMinutes = ((end - start) / 60_000).toInt().coerceAtLeast(1),
+            endTime = maxOf(start + 60_000, end), address = inferAddress(clean),
+            playDurationMinutes = ((end - start) / 60_000).toInt().coerceAtLeast(1),
             reservationInfo = reservationBits.joinToString("\n"), cost = money.find(joined)?.groupValues?.getOrNull(1)?.toDoubleOrNull() ?: 0.0,
             note = joined.take(1200)
         )

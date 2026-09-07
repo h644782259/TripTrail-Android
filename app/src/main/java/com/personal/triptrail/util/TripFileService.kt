@@ -99,7 +99,7 @@ object TripFileService {
     }
 
     private fun tripJson(trip: Trip, includeLocalUris: Boolean) = JSONObject().apply {
-        put("id", trip.id); put("title", trip.title); put("destination", trip.destination)
+        put("id", trip.id); put("title", trip.title); put("destination", trip.destination); put("licensePlate", trip.licensePlate)
         put("startDate", Instant.ofEpochMilli(trip.startDate).toString()); put("endDate", Instant.ofEpochMilli(trip.endDate).toString())
         put("note", trip.note); put("createdAt", Instant.ofEpochMilli(trip.createdAt).toString())
         put("days", JSONArray(trip.days.sortedBy { it.sortOrder }.map { dayJson(it, includeLocalUris) }))
@@ -116,10 +116,9 @@ object TripFileService {
         put("address", item.address); put("note", item.note)
         put("locationModeRaw", item.locationMode.name.lowercase()); put("placeName", item.placeName); put("placeAddress", item.placeAddress)
         put("originName", item.originName); put("originAddress", item.originAddress); put("destinationName", item.destinationName); put("destinationAddress", item.destinationAddress)
-        put("transportRaw", item.transport.label); put("distanceText", item.distanceText)
         put("playDurationMinutes", item.playDurationMinutes); put("reservationInfo", item.reservationInfo); put("cost", item.cost)
-        put("isCompleted", item.isCompleted); put("executionStatusRaw", item.executionStatus.name.lowercase()); put("isAutomaticCompletionOverridden", item.isAutomaticCompletionOverridden); put("isFixedTime", item.isFixedTime); put("sortOrder", item.sortOrder)
-        put("isFavorite", item.isFavorite); put("favoriteCreatedAt", Instant.ofEpochMilli(item.favoriteCreatedAt).toString()); put("sourceFavoriteID", item.sourceFavoriteId ?: JSONObject.NULL)
+        put("isCompleted", item.isCompleted); put("executionStatusRaw", item.executionStatus.name.lowercase()); put("isAutomaticCompletionOverridden", item.isAutomaticCompletionOverridden); put("isFixedTime", item.isFixedTime); put("isTimePending", item.isTimePending); put("sortOrder", item.sortOrder)
+        put("isFavorite", item.isFavorite); put("favoriteCity", item.favoriteCity); put("favoriteCreatedAt", Instant.ofEpochMilli(item.favoriteCreatedAt).toString()); put("sourceFavoriteID", item.sourceFavoriteId ?: JSONObject.NULL)
         put("media", JSONArray(if (includeLocalUris) item.media.map(::mediaJson) else emptyList<JSONObject>()))
     }
 
@@ -146,7 +145,7 @@ object TripFileService {
         put("timeLabel", entry.timeLabel); put("address", entry.address); put("supplementalInfo", entry.supplementalInfo); put("note", entry.note)
         put("locationModeRaw", entry.locationMode.name.lowercase()); put("placeName", entry.placeName); put("placeAddress", entry.placeAddress)
         put("originName", entry.originName); put("originAddress", entry.originAddress); put("destinationName", entry.destinationName); put("destinationAddress", entry.destinationAddress)
-        put("transportRaw", entry.transport.label); put("routeInfo", entry.routeInfo); put("cost", entry.cost); put("didPrefillSourceMemory", true)
+        put("cost", entry.cost); put("didPrefillSourceMemory", true)
         put("sourceMemoryPrefill", JSONObject.NULL); put("sortOrder", entry.sortOrder); put("sourceItemID", JSONObject.NULL); put("storyDayID", dayId)
         put("media", JSONArray(if (includeLocalUris) entry.media.map(::mediaJson) else emptyList<JSONObject>()))
     }
@@ -157,7 +156,7 @@ object TripFileService {
     }
 
     private fun parseTrip(obj: JSONObject) = Trip(
-        id = obj.id(), title = obj.optString("title"), destination = obj.optString("destination"),
+        id = obj.id(), title = obj.optString("title"), destination = obj.optString("destination"), licensePlate = obj.optString("licensePlate"),
         startDate = obj.date("startDate"), endDate = obj.date("endDate"), note = obj.optString("note"),
         createdAt = obj.dateOrNull("createdAt") ?: System.currentTimeMillis(),
         days = obj.optJSONArray("days")?.objects()?.map(::parseDay).orEmpty(),
@@ -177,7 +176,11 @@ object TripFileService {
         transport = transportMode(obj.stringFrom("transportRaw", "transport")), distanceText = obj.optString("distanceText"), playDurationMinutes = obj.optInt("playDurationMinutes", 60),
         reservationInfo = obj.optString("reservationInfo"), cost = obj.optDouble("cost", 0.0), isCompleted = obj.optBoolean("isCompleted"),
         executionStatus = executionStatus(obj.stringFrom("executionStatusRaw", "executionStatus"), obj.optBoolean("isCompleted")),
-        isAutomaticCompletionOverridden = obj.optBoolean("isAutomaticCompletionOverridden"), isFixedTime = obj.optBoolean("isFixedTime"), sortOrder = obj.optInt("sortOrder"), isFavorite = obj.optBoolean("isFavorite"),
+        isAutomaticCompletionOverridden = obj.optBoolean("isAutomaticCompletionOverridden"), isFixedTime = obj.optBoolean("isFixedTime"), isTimePending = obj.optBoolean("isTimePending"),
+        vouchers = obj.optJSONArray("vouchers")?.objects()?.map { voucher -> TravelVoucher(
+            id = voucher.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
+            name = voucher.optString("name"), mimeType = voucher.optString("mimeType"), dataBase64 = voucher.optString("dataBase64")
+        ) }.orEmpty(), sortOrder = obj.optInt("sortOrder"), isFavorite = obj.optBoolean("isFavorite"), favoriteCity = obj.optString("favoriteCity"),
         favoriteCreatedAt = obj.dateOrNull("favoriteCreatedAt") ?: System.currentTimeMillis(),
         sourceFavoriteId = obj.optionalString("sourceFavoriteID") ?: obj.optionalString("sourceFavoriteId"),
         media = obj.optJSONArray("media")?.objects()?.map(::parseMedia).orEmpty(),

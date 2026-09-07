@@ -22,3 +22,9 @@
 Android 客户端导出的旅程字段与 iPhone 版 `TripRecord`、`TripDayRecord`、`ItineraryItemRecord` 对齐；足迹字段与 `StoryRecord`、`StoryDayRecord`、`StoryEntryRecord` 对齐。
 
 完整照片和视频迁移请使用 Android 客户端的 `.triptrailbackup`，其内容是数据清单和媒体文件组成的 ZIP 容器。
+
+## 已移除的路程字段
+
+行程、收藏和足迹不再提供“前往方式”和“路程说明”。`transportRaw` / `transport`、`distanceText`、`routeInfo` 仅兼容读取旧文件，新生成的交换 JSON 不再输出这些字段；接收方必须允许字段缺失。旧版本客户端可能需要升级后导入。本地旧字段仅用于存储兼容，不参与展示、识别、导航方式选择或足迹自动说明。
+
+地点的单地点/起终点、航班车次、预约信息、开始和结束时间继续保留。高德路线规划使用所选地点和规划时的出行方式，不再依赖安排上的旧前往方式。

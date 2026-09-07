@@ -21,7 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?) {
+fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?, incomingVersion: Int = 0) {
     val context = LocalContext.current
     val data by repository.data.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(RootTab.TRIPS) }
@@ -38,7 +38,7 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?) {
         }
     }
 
-    LaunchedEffect(initialSharedUri) {
+    LaunchedEffect(initialSharedUri, incomingVersion) {
         if (initialSharedUri != null) runCatching {
             withContext(Dispatchers.IO) {
                 context.contentResolver.openInputStream(initialSharedUri)?.use { PortablePackageService(context).prepareShared(it) }
@@ -49,7 +49,8 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?) {
     }
 
     Scaffold(
-        containerColor = TripCanvas,
+        modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(),
+        containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         bottomBar = { TripBottomBar(selected = tab, onSelect = { selected -> tab = selected; tripId = null; storyId = null; showsStatistics = false }) },
     ) { padding ->
@@ -73,7 +74,7 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?) {
 
     incoming?.let { prepared ->
         val (trip, story) = prepared.content
-        AlertDialog(
+        AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(),
             onDismissRequest = { prepared.discard(); incoming = null },
             title = { Text("收藏这份${if (trip != null) "旅程" else "足迹"}？") },
             text = { Text("“${trip?.title ?: story?.title}”会作为独立副本添加，不会覆盖本机已有内容。") },
@@ -89,7 +90,7 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?) {
         )
     }
     incomingError?.let { message ->
-        AlertDialog(
+        AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(),
             onDismissRequest = { incomingError = null }, title = { Text("无法打开分享") }, text = { Text(message) },
             confirmButton = { TextButton(onClick = { incomingError = null }) { Text("好") } },
         )

@@ -45,7 +45,7 @@ class TripRepository(private val context: Context) {
     fun exportJson(): String = json.encodeToString(_data.value)
     fun decodeJson(value: String): AppData = json.decodeFromString(value)
 
-    fun createTrip(title: String, destination: String, startDate: Long, endDate: Long, note: String = ""): Trip {
+    fun createTrip(title: String, destination: String, startDate: Long, endDate: Long, note: String = "", licensePlate: String = ""): Trip {
         val safeEnd = maxOf(startDate.startOfDay(), endDate.startOfDay())
         val start = startDate.startOfDay()
         val totalDays = java.time.temporal.ChronoUnit.DAYS.between(start.localDate(), safeEnd.localDate()).toInt() + 1
@@ -53,12 +53,12 @@ class TripRepository(private val context: Context) {
             val date = start.localDate().plusDays(index.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
             TripDay(date = date, title = "第 ${index + 1} 天", sortOrder = index)
         }
-        val trip = Trip(title = title, destination = destination, startDate = start, endDate = safeEnd, note = note, days = days)
+        val trip = Trip(title = title, destination = destination, startDate = start, endDate = safeEnd, note = note, days = days, licensePlate = licensePlate.trim().uppercase(java.util.Locale.ROOT))
         mutate { it.copy(trips = it.trips + trip) }
         return trip
     }
 
-    fun updateTrip(updated: Trip) = mutate { data -> data.copy(trips = data.trips.map { if (it.id == updated.id) updated else it }) }
+    fun updateTrip(updated: Trip) = mutate { data -> data.copy(trips = data.trips.map { if (it.id == updated.id) updated.withSynchronizedDates() else it }) }
     fun deleteTrip(id: String) = mutate { data -> data.copy(trips = data.trips.filterNot { it.id == id }) }
 
     fun addDay(tripId: String): TripDay? {
@@ -123,7 +123,7 @@ class TripRepository(private val context: Context) {
         }
     }) }
 
-    fun suggestedStart(day: TripDay): Long = day.items.maxByOrNull { it.sortOrder }?.endTime
+    fun suggestedStart(day: TripDay): Long = day.items.filterNot { it.isTimePending }.maxOfOrNull { it.endTime }
         ?: day.date.localDate().atTime(9, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     fun saveItem(tripId: String, dayId: String, item: ItineraryItem) = mutate { data -> data.copy(trips = data.trips.map { trip ->
@@ -141,49 +141,21 @@ class TripRepository(private val context: Context) {
 
     fun appendRecognizedJourney(tripId: String, recognizedDays: List<RecognizedJourneyDay>, targetDayId: String? = null): Int {
         var added = 0
-        mutate { data ->
-            data.copy(trips = data.trips.map { trip ->
-                if (trip.id != tripId) return@map trip
-                val ordered = trip.days.sortedBy { it.sortOrder }.toMutableList()
-                val target = targetDayId?.let { id -> ordered.firstOrNull { it.id == id } }
-                recognizedDays.forEachIndexed { dayIndex, recognized ->
-                    val day = target ?: run {
-                        val plannedDate = recognized.date ?: trip.startDate.localDate().plusDays((recognized.sourceDayNumber - 1).coerceAtLeast(0).toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                        ordered.firstOrNull { it.date.startOfDay() == plannedDate.startOfDay() } ?: TripDay(
-                            date = plannedDate,
-                            title = recognized.title.ifBlank { "第 ${recognized.sourceDayNumber} 天" },
-                            sortOrder = ordered.size,
-                        ).also { ordered += it }
-                    }
-                    val nextOrder = (day.items.maxOfOrNull { it.sortOrder } ?: -1) + 1
-                    val items = recognized.items.mapIndexed { index, item ->
-                        added++
-                        val shift = target?.date?.startOfDay()?.minus(item.startTime.startOfDay()) ?: 0L
-                        item.copy(
-                            id = java.util.UUID.randomUUID().toString(),
-                            startTime = item.startTime + shift,
-                            endTime = item.endTime + shift,
-                            sortOrder = nextOrder + index,
-                            isAutomaticCompletionOverridden = false,
-                        ).withAutomaticExecutionStatus()
-                    }
-                    val updatedDay = day.copy(
-                        title = if (day.title.isBlank() || target == null) recognized.title.ifBlank { day.title } else day.title,
-                        note = listOf(day.note, recognized.note).filter { it.isNotBlank() }.joinToString("\n"),
-                        items = day.items + items,
-                    )
-                    val index = ordered.indexOfFirst { it.id == day.id }
-                    if (index >= 0) ordered[index] = updatedDay
-                }
-                val normalized = ordered.mapIndexed { index, day -> day.copy(sortOrder = index) }
-                trip.copy(
-                    startDate = normalized.minOfOrNull { it.date.startOfDay() } ?: trip.startDate,
-                    endDate = maxOf(trip.endDate, normalized.maxOfOrNull { it.date.startOfDay() } ?: trip.endDate),
-                    days = normalized,
-                )
-            })
-        }
+        mutate { data -> data.copy(trips = data.trips.map { trip ->
+            if (trip.id != tripId) trip else trip.importingRecognizedJourney(recognizedDays, targetDayId).also {
+                added = it.totalCount - trip.totalCount
+            }
+        }) }
         return added
+    }
+
+    fun createRecognizedJourney(title: String, destination: String, startDate: Long, recognizedDays: List<RecognizedJourneyDay>, licensePlate: String = ""): Trip {
+        require(title.isNotBlank() && recognizedDays.any { day -> day.items.any { it.title.isNotBlank() } }) { "请填写旅程名称并至少保留一个安排。" }
+        val baseDate = recognizedDays.mapNotNull { it.date }.minOrNull() ?: startDate
+        val trip = Trip(title = title.trim(), destination = destination.trim(), startDate = baseDate.startOfDay(), endDate = baseDate.startOfDay(), licensePlate = licensePlate.trim().uppercase(java.util.Locale.ROOT))
+            .importingRecognizedJourney(recognizedDays)
+        mutate { it.copy(trips = it.trips + trip) }
+        return trip
     }
 
     fun deleteItem(tripId: String, dayId: String, itemId: String) = mutate { data -> data.copy(trips = data.trips.map { trip ->
@@ -206,6 +178,22 @@ class TripRepository(private val context: Context) {
     }) }
 
     /** Reorders one day and reconciles the original time slots with the new order. */
+    fun moveItemToDay(tripId: String, sourceDayId: String, itemId: String, targetDayId: String) = mutate { data ->
+        data.copy(trips = data.trips.map { trip ->
+            if (trip.id != tripId || sourceDayId == targetDayId) return@map trip
+            val source = trip.days.firstOrNull { it.id == sourceDayId } ?: return@map trip
+            val target = trip.days.firstOrNull { it.id == targetDayId } ?: return@map trip
+            val item = source.items.firstOrNull { it.id == itemId } ?: return@map trip
+            val start = target.date.localDate().atTime(java.time.Instant.ofEpochMilli(item.startTime).atZone(ZoneId.systemDefault()).toLocalTime()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val moved = item.copy(startTime = start, endTime = start + (item.endTime - item.startTime).coerceAtLeast(60_000L), sortOrder = target.items.size)
+            trip.copy(days = trip.days.map { day -> when (day.id) {
+                sourceDayId -> day.copy(items = day.items.filterNot { it.id == itemId })
+                targetDayId -> day.copy(items = day.items + moved)
+                else -> day
+            } })
+        })
+    }
+
     fun moveItemWithTimeReview(tripId: String, dayId: String, itemId: String, targetIndex: Int): ItineraryMoveResult {
         var result = ItineraryMoveResult.UNCHANGED
         mutate { data ->
@@ -219,11 +207,12 @@ class TripRepository(private val context: Context) {
                     val to = targetIndex.coerceIn(0, original.lastIndex)
                     if (from == to) return@map day
 
-                    val slots = original.map(::timeSlot)
+                    val slots = original.filterNot { it.isTimePending }.map(::timeSlot)
                     val reordered = original.toMutableList().apply { add(to, removeAt(from)) }
-                    val updatedItems = reordered.mapIndexed { index, item ->
-                        if (item.isFixedTime) item else {
-                            val slot = slots[index]
+                    var timedIndex = 0
+                    val updatedItems = reordered.map { item ->
+                        val slot = if (item.isTimePending) null else slots[timedIndex++]
+                        if (item.isFixedTime || slot == null) item else {
                             val start = slotStart(day.date, slot)
                             item.copy(startTime = start, endTime = start + durationOf(item).coerceAtLeast(60_000L))
                         }
@@ -240,7 +229,7 @@ class TripRepository(private val context: Context) {
         data.copy(trips = data.trips.map { trip ->
             if (trip.id != tripId) trip else trip.copy(days = trip.days.map { day ->
                 if (day.id != dayId) day else day.copy(items = day.items.map { item ->
-                    adjustments.firstOrNull { it.item.id == item.id }?.let { adjustment ->
+                    adjustments.firstOrNull { it.item.id == item.id && !item.isFixedTime && !item.isTimePending }?.let { adjustment ->
                         item.copy(startTime = adjustment.suggestedStartTime, endTime = adjustment.suggestedEndTime)
                     } ?: item
                 })
@@ -256,7 +245,7 @@ class TripRepository(private val context: Context) {
     private fun durationOf(item: ItineraryItem): Long = (item.endTime - item.startTime).coerceAtLeast(0L)
 
     private fun List<ItineraryItem>.normalizeItems(): List<ItineraryItem> =
-        sortedWith(compareBy<ItineraryItem> { it.startTime }.thenBy { it.id })
+        sortedWith(compareBy<ItineraryItem> { it.isTimePending }.thenBy { if (it.isTimePending) it.sortOrder.toLong() else it.startTime }.thenBy { it.id })
             .mapIndexed { index, item ->
                 val safeEnd = maxOf(item.endTime, item.startTime + 60_000L)
                 item.copy(endTime = safeEnd, sortOrder = index)
@@ -294,7 +283,7 @@ class TripRepository(private val context: Context) {
                 if (day.id != dayId) day else {
                     val first = day.items.firstOrNull { it.id == firstItemId }
                     val second = day.items.firstOrNull { it.id == secondItemId }
-                    if (first == null || second == null) day else day.copy(items = day.items.map { item ->
+                    if (first == null || second == null || first.isFixedTime || second.isFixedTime || first.isTimePending || second.isTimePending) day else day.copy(items = day.items.map { item ->
                         when (item.id) {
                             firstItemId -> item.copy(startTime = second.startTime, endTime = second.endTime)
                             secondItemId -> item.copy(startTime = first.startTime, endTime = first.endTime)
@@ -333,16 +322,16 @@ class TripRepository(private val context: Context) {
                     note = oldDay?.note.orEmpty(), details = oldDay?.details.orEmpty(), sortOrder = day.sortOrder, sourceDayId = day.id,
                     entries = day.items.sortedBy { it.sortOrder }.map { item ->
                         val old = oldDay?.entries?.firstOrNull { it.sourceItemId == item.id }
-                        old?.copy(title = item.title, category = item.category, startTime = item.startTime, endTime = item.endTime,
+                        old?.copy(title = item.title, category = item.category, startTime = item.startTime.takeUnless { item.isTimePending }, endTime = item.endTime.takeUnless { item.isTimePending },
                             locationMode = item.locationMode, placeName = item.placeName, placeAddress = item.placeAddress,
                             originName = item.originName, originAddress = item.originAddress,
                             destinationName = item.destinationName, destinationAddress = item.destinationAddress,
-                            timeLabel = "${item.startTime.timeText()} – ${item.endTime.timeText()}", sortOrder = item.sortOrder)
-                            ?: StoryEntry(title = item.title, category = item.category, startTime = item.startTime, endTime = item.endTime,
+                            timeLabel = item.timeRangeText, sortOrder = item.sortOrder)
+                            ?: StoryEntry(title = item.title, category = item.category, startTime = item.startTime.takeUnless { item.isTimePending }, endTime = item.endTime.takeUnless { item.isTimePending },
                                 locationMode = item.locationMode, placeName = item.placeName, placeAddress = item.placeAddress,
                                 originName = item.originName, originAddress = item.originAddress,
                                 destinationName = item.destinationName, destinationAddress = item.destinationAddress,
-                                timeLabel = "${item.startTime.timeText()} – ${item.endTime.timeText()}", sortOrder = item.sortOrder,
+                                timeLabel = item.timeRangeText, sortOrder = item.sortOrder,
                                 sourceItemId = item.id)
                     }
                 )
@@ -403,14 +392,24 @@ class TripRepository(private val context: Context) {
 
     fun deleteFavorite(id: String) = mutate { data -> data.copy(favorites = data.favorites.filterNot { it.id == id }) }
 
-    fun importFavorites(tripId: String, dayId: String, favoriteIds: Set<String>) {
-        var day = _data.value.trips.firstOrNull { it.id == tripId }?.days?.firstOrNull { it.id == dayId } ?: return
-        _data.value.favorites.filter { it.id in favoriteIds }.sortedBy { it.favoriteCreatedAt }.forEach { favorite ->
-            val start = suggestedStart(day)
-            val copy = favorite.importedFromFavorite(start)
-            saveItem(tripId, dayId, copy)
-            day = _data.value.trips.first { it.id == tripId }.days.first { it.id == dayId }
-        }
+    fun importFavorites(tripId: String, dayId: String, favoriteIds: Set<String>): Int {
+        var count = 0
+        mutate { data -> data.copy(trips = data.trips.map { trip ->
+            if (trip.id != tripId) trip else trip.copy(days = trip.days.map { day ->
+                if (day.id != dayId) day else {
+                    val existing = day.items.mapNotNull { it.sourceFavoriteId }.toSet()
+                    var updated = day
+                    data.favorites.filter { it.id in favoriteIds && it.id !in existing }
+                        .sortedByDescending { it.favoriteCreatedAt }.forEach { favorite ->
+                            val item = favorite.importedFromFavorite(suggestedStart(updated)).copy(sortOrder = updated.items.size)
+                            updated = updated.copy(items = updated.items + item)
+                            count++
+                        }
+                    updated
+                }
+            })
+        }) }
+        return count
     }
 
     fun saveStoryEntry(storyId: String, dayId: String, entry: StoryEntry) = mutate { data -> data.copy(stories = data.stories.map { story ->
@@ -471,12 +470,12 @@ class TripRepository(private val context: Context) {
         fun date(offset: Int) = today.localDate().plusDays(offset.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         fun at(day: Long, hour: Int, minute: Int = 0) = day.localDate().atTime(hour, minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         fun item(day: Long, title: String, category: PlaceCategory, start: String, end: String, order: Int,
-                 place: String = title, placeAddress: String = "", note: String = "", transport: TransportMode = TransportMode.CAR,
-                 distance: String = "", duration: Int = 60, reservation: String = "", cost: Double = 0.0,
+                 place: String = title, placeAddress: String = "", note: String = "",
+                 duration: Int = 60, reservation: String = "", cost: Double = 0.0,
                  completed: Boolean = false, media: List<MediaReference> = emptyList()) = ItineraryItem(
             title = title, category = category, startTime = at(day, start.substringBefore(':').toInt(), start.substringAfter(':').toInt()),
             endTime = at(day, end.substringBefore(':').toInt(), end.substringAfter(':').toInt()), address = placeAddress, note = note,
-            placeName = place, placeAddress = placeAddress, transport = transport, distanceText = distance,
+            placeName = place, placeAddress = placeAddress,
             playDurationMinutes = duration, reservationInfo = reservation, cost = cost, isCompleted = completed,
             executionStatus = if (completed) ItineraryExecutionStatus.COMPLETED else ItineraryExecutionStatus.NOT_STARTED,
             sortOrder = order, media = media,
@@ -484,7 +483,7 @@ class TripRepository(private val context: Context) {
 
         val favorites = listOf(
             ItineraryItem(title = "羊卓雍措", category = PlaceCategory.ATTRACTION, placeName = "羊卓雍措", note = "2号观景台更出片", cost = 100.0, isFavorite = true, favoriteCreatedAt = System.currentTimeMillis() - 3_000),
-            ItineraryItem(title = "品尝杭帮菜", category = PlaceCategory.RESTAURANT, placeName = "楼外楼（孤山店）", note = "尝试西湖醋鱼和龙井虾仁，用餐后可在孤山稍作休息。", distanceText = "步行 900 米", cost = 328.0, isFavorite = true, favoriteCreatedAt = System.currentTimeMillis() - 2_000),
+            ItineraryItem(title = "品尝杭帮菜", category = PlaceCategory.RESTAURANT, placeName = "楼外楼（孤山店）", note = "尝试西湖醋鱼和龙井虾仁，用餐后可在孤山稍作休息。", cost = 328.0, isFavorite = true, favoriteCreatedAt = System.currentTimeMillis() - 2_000),
             ItineraryItem(title = "Wk Road", category = PlaceCategory.ATTRACTION, placeName = "Shanghai Wukang Road", isFavorite = true, favoriteCreatedAt = System.currentTimeMillis() - 1_000),
         )
         val sampleImageFile = File(mediaDirectory, "journey-lake-sample.png")
@@ -498,18 +497,18 @@ class TripRepository(private val context: Context) {
             note = "覆盖路线、预约、费用、导航、照片和视频的完整测试旅程。",
             days = listOf(
                 TripDay(date = currentStart, title = "抵达杭州", sortOrder = 0, items = listOf(
-                    item(currentStart, "抵达杭州东站", PlaceCategory.TRANSPORT, "09:10", "09:40", 0, "杭州东站", note = "从东广场出站，乘地铁前往酒店。", transport = TransportMode.TRAIN, distance = "高铁 1 小时 5 分", duration = 30, reservation = "G7311 · 08车12A", cost = 73.0, completed = true),
-                    item(currentStart, "入住湖滨酒店", PlaceCategory.HOTEL, "10:30", "11:00", 1, "湖滨酒店", note = "先寄存行李，下午两点后领取房卡。", transport = TransportMode.BUS, distance = "地铁 6 站", duration = 30, reservation = "预订号 TT20260830", cost = 688.0, completed = true),
-                    item(currentStart, "补充旅行用品", PlaceCategory.OTHER, "11:10", "11:25", 2, "湖滨银泰 in77", note = "检查充电宝、纸巾和备用电池。", transport = TransportMode.WALK, distance = "步行 350 米", duration = 15, cost = 96.5),
+                    item(currentStart, "抵达杭州东站", PlaceCategory.TRANSPORT, "09:10", "09:40", 0, "杭州东站", note = "从东广场出站，乘地铁前往酒店。", duration = 30, reservation = "G7311 · 08车12A", cost = 73.0, completed = true),
+                    item(currentStart, "入住湖滨酒店", PlaceCategory.HOTEL, "10:30", "11:00", 1, "湖滨酒店", note = "先寄存行李，下午两点后领取房卡。", duration = 30, reservation = "预订号 TT20260830", cost = 688.0, completed = true),
+                    item(currentStart, "补充旅行用品", PlaceCategory.OTHER, "11:10", "11:25", 2, "湖滨银泰 in77", note = "检查充电宝、纸巾和备用电池。", duration = 15, cost = 96.5),
                 )),
                 TripDay(date = currentToday, title = "西湖环线", sortOrder = 1, items = listOf(
-                    item(currentToday, "游览断桥残雪", PlaceCategory.ATTRACTION, "08:00", "09:30", 0, "断桥残雪", note = "从北山街慢慢走到平湖秋月，拍一段湖面晨光。", transport = TransportMode.WALK, distance = "步行 1.8 公里", duration = 90, reservation = "无需预约", media = listOf(lakeMedia)),
-                    item(currentToday, "在楼外楼用餐", PlaceCategory.RESTAURANT, "11:30", "13:00", 1, "楼外楼（孤山店）", note = "预留临窗位，尝试西湖醋鱼与龙井虾仁。", transport = TransportMode.WALK, distance = "步行 900 米", duration = 90, reservation = "12:00 · 2人 · 手机尾号 0830", cost = 328.0),
-                    item(currentToday, "购买旅行伴手礼", PlaceCategory.OTHER, "15:20", "17:00", 2, "河坊街", note = "茶叶和桂花糕控制在一个手提袋内。", transport = TransportMode.RIDE, distance = "骑行 3.2 公里", duration = 100, cost = 180.0),
+                    item(currentToday, "游览断桥残雪", PlaceCategory.ATTRACTION, "08:00", "09:30", 0, "断桥残雪", note = "从北山街慢慢走到平湖秋月，拍一段湖面晨光。", duration = 90, reservation = "无需预约", media = listOf(lakeMedia)),
+                    item(currentToday, "在楼外楼用餐", PlaceCategory.RESTAURANT, "11:30", "13:00", 1, "楼外楼（孤山店）", note = "预留临窗位，尝试西湖醋鱼与龙井虾仁。", duration = 90, reservation = "12:00 · 2人 · 手机尾号 0830", cost = 328.0),
+                    item(currentToday, "购买旅行伴手礼", PlaceCategory.OTHER, "15:20", "17:00", 2, "河坊街", note = "茶叶和桂花糕控制在一个手提袋内。", duration = 100, cost = 180.0),
                 )),
                 TripDay(date = currentEnd, title = "茶园与返程", sortOrder = 2, items = listOf(
-                    item(currentEnd, "漫步龙井村茶园", PlaceCategory.SPECIAL, "09:00", "11:30", 0, "龙井村茶园", note = "天气合适就沿十里琅珰走一小段。", transport = TransportMode.CAR, distance = "驾车约 11 公里", duration = 150, reservation = "茶室预约 09:30", cost = 120.0),
-                    item(currentEnd, "乘坐返程高铁", PlaceCategory.TRANSPORT, "17:05", "18:10", 1, "杭州东站", note = "提前四十分钟到站。", transport = TransportMode.TRAIN, distance = "高铁 1 小时 5 分", duration = 65, reservation = "G7590 · 05车06F", cost = 73.0),
+                    item(currentEnd, "漫步龙井村茶园", PlaceCategory.SPECIAL, "09:00", "11:30", 0, "龙井村茶园", note = "天气合适就沿十里琅珰走一小段。", duration = 150, reservation = "茶室预约 09:30", cost = 120.0),
+                    item(currentEnd, "乘坐返程高铁", PlaceCategory.TRANSPORT, "17:05", "18:10", 1, "杭州东站", note = "提前四十分钟到站。", duration = 65, reservation = "G7590 · 05车06F", cost = 73.0),
                 )),
             ),
         )
@@ -517,15 +516,15 @@ class TripRepository(private val context: Context) {
         val upcoming = Trip(
             title = "上海周末城市漫步（测试）", destination = "上海", startDate = upcomingDay, endDate = date(8),
             note = "用于查看即将出发状态与跨系统分享效果。", days = listOf(TripDay(date = upcomingDay, title = "建筑与夜色", sortOrder = 0, items = listOf(
-                item(upcomingDay, "虹桥机场集合", PlaceCategory.TRANSPORT, "08:00", "09:00", 0, "上海虹桥国际机场 T2", "上海市长宁区虹桥路2550号", "测试飞机交通方式与预约信息。", TransportMode.FLIGHT, "机场线", 60, "MU5101 · 登机口 C52", 860.0),
-                item(upcomingDay, "外滩夜景", PlaceCategory.ATTRACTION, "18:30", "20:30", 1, "外滩", "上海市黄浦区中山东一路", "蓝调时刻前到达，测试城市照片展示。", TransportMode.BUS, "公交约 25 分钟", 120),
+                item(upcomingDay, "虹桥机场集合", PlaceCategory.TRANSPORT, "08:00", "09:00", 0, "上海虹桥国际机场 T2", "上海市长宁区虹桥路2550号", "测试飞机交通方式与预约信息。", 60, "MU5101 · 登机口 C52", 860.0),
+                item(upcomingDay, "外滩夜景", PlaceCategory.ATTRACTION, "18:30", "20:30", 1, "外滩", "上海市黄浦区中山东一路", "蓝调时刻前到达，测试城市照片展示。", 120),
             ))))
         val historyDay = date(-45)
         val history = Trip(
             title = "厦门海风旧游（测试）", destination = "厦门", startDate = historyDay, endDate = date(-42),
             note = "用于查看历史旅程、全部完成进度与归档入口。", days = listOf(TripDay(date = historyDay, title = "鼓浪屿一日", sortOrder = 0, items = listOf(
-                item(historyDay, "乘船前往鼓浪屿", PlaceCategory.TRANSPORT, "08:10", "08:35", 0, "厦门邮轮中心厦鼓码头", note = "刷身份证登船。", transport = TransportMode.CAR, distance = "轮渡约 25 分钟", duration = 25, reservation = "08:10 船票", cost = 35.0, completed = true),
-                item(historyDay, "游览菽庄花园与钢琴博物馆", PlaceCategory.ATTRACTION, "09:20", "11:40", 1, "菽庄花园与钢琴博物馆", note = "旧旅程全部完成。", transport = TransportMode.WALK, distance = "步行 1.4 公里", duration = 140, cost = 30.0, completed = true),
+                item(historyDay, "乘船前往鼓浪屿", PlaceCategory.TRANSPORT, "08:10", "08:35", 0, "厦门邮轮中心厦鼓码头", note = "刷身份证登船。", duration = 25, reservation = "08:10 船票", cost = 35.0, completed = true),
+                item(historyDay, "游览菽庄花园与钢琴博物馆", PlaceCategory.ATTRACTION, "09:20", "11:40", 1, "菽庄花园与钢琴博物馆", note = "旧旅程全部完成。", duration = 140, cost = 30.0, completed = true),
             ))))
         val trips = listOf(current, upcoming, history)
 

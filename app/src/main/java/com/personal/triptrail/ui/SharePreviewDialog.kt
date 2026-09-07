@@ -86,38 +86,35 @@ private fun SharePreviewScreen(
     val data = remember(selectedIds, allDayIds) { dataFor(selectedIds) }
     val context = LocalContext.current
     val listState = rememberLazyListState()
-    val toolbarOnPoster by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 86 }
-    }
-    val toolbarColor = if (toolbarOnPoster) Color.White else TripInk
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true),
     ) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = TripCanvas,
+            contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
                 CenterAlignedTopAppBar(
-                    modifier = Modifier.statusBarsPadding(),
-                    title = { Text("分享预览", color = toolbarColor, fontWeight = FontWeight.Bold) },
-                    actions = { TextButton(onClick = onDismiss) { Text("完成", color = toolbarColor, fontWeight = FontWeight.Bold) } },
+                    windowInsets = WindowInsets(0, 0, 0, 0),
+                    title = { Text("分享预览", color = TripInk, fontWeight = FontWeight.Bold) },
+                    actions = { TextButton(onClick = onDismiss) { Text("完成", color = TripInk, fontWeight = FontWeight.Bold) } },
                     colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = Color.Transparent,
-                        scrolledContainerColor = Color.Transparent,
+                        containerColor = TripCanvas,
+                        scrolledContainerColor = TripCanvas,
                     ),
                 )
             },
         ) { padding ->
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
-                    top = padding.calculateTopPadding() + 10.dp,
-                    bottom = padding.calculateBottomPadding() + 28.dp,
+                    top = 10.dp,
+                    bottom = 48.dp,
                 ),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -406,8 +403,8 @@ private fun Trip.sharePreviewData(selectedIds: Set<String>): SharePreviewData {
                 SharePreviewItem(
                     id = item.id,
                     title = item.title.ifBlank { "未命名安排" },
-                    time = "${item.startTime.timeText()}–${item.endTime.timeText()}",
-                    detail = listOf(item.locationSummary, item.category.label, item.distanceText, item.note).filter { it.isNotBlank() }.joinToString(" · "),
+                    time = item.timeRangeText,
+                    detail = listOf(item.locationSummary, item.category.label, item.note).filter { it.isNotBlank() }.joinToString(" · "),
                     completed = status == ItineraryExecutionStatus.COMPLETED,
                     statusText = status.label,
                     media = item.media.sortedBy { it.sortOrder },

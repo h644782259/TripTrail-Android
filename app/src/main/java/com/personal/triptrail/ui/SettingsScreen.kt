@@ -10,6 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.SystemUpdateAlt
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -80,13 +83,13 @@ fun SettingsScreen(
     }
 
     LazyColumn(
-        modifier = modifier.fillMaxSize().background(Color(0xFFF4F3F7)),
+        modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(16.dp, 18.dp, 16.dp, 112.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(26.dp),
     ) {
         item {
             SettingsGroup("开始体验") {
-                SettingsRow(Icons.Default.AutoAwesome, "添加示例旅程", tint = TripLakeText) {
+                SettingsRow(Icons.Default.AutoFixHigh, "添加示例旅程", tint = TripLakeText) {
                     if (repository.addSampleData()) {
                         message = "示例旅程已添加。"
                         onOpenTrips()
@@ -96,9 +99,9 @@ fun SettingsScreen(
                 }
             }
         }
-        item { SettingsGroup("旅行概览") { SettingsRow(Icons.Default.BarChart, "旅行统计", tint = TripLakeText, trailing = { Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) }, action = onOpenStatistics) } }
+        item { SettingsGroup("旅行概览") { SettingsRow(Icons.Default.BarChart, "旅行统计", tint = TripLakeText, textColor = Color(0xFF1C1C1E), trailing = { Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) }, action = onOpenStatistics) } }
         item { SettingsGroup("智能识别") {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text("使用大模型智能识别", Modifier.weight(1f)); Switch(smartEnabled, { checked -> smartEnabled = checked; recognitionSettings.enabled = checked }) }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) { TripToggleRow("使用大模型智能识别", smartEnabled) { checked -> smartEnabled = checked; recognitionSettings.enabled = checked } }
             if (smartEnabled) {
                 HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = TripMist.copy(alpha = .45f))
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -118,10 +121,10 @@ fun SettingsScreen(
             }
         } }
         item { SettingsGroup("备份与恢复", "含照片和视频；恢复将替换本机数据。") {
-            SettingsRow(Icons.Default.IosShare, "导出备份", tint = TripLakeText) { backupExporter.launch("TripTrail-Backup.triptrailbackup") }; GroupDivider(); SettingsRow(Icons.Default.DownloadForOffline, "恢复备份", tint = TripLakeText) { backupImporter.launch(arrayOf("application/vnd.triptrail.backup", "application/json", "text/plain", "*/*")) }
+            SettingsRow(Icons.Default.IosShare, "导出备份", tint = TripLakeText) { backupExporter.launch("旅迹-完整备份.triptrailbackup") }; GroupDivider(); SettingsRow(Icons.Outlined.FileDownload, "恢复备份", tint = TripLakeText) { backupImporter.launch(arrayOf("application/vnd.triptrail.backup", "application/json", "text/plain", "*/*")) }
         } }
-        item { SettingsGroup("接收分享") { SettingsRow(Icons.Default.MoveToInbox, "导入旅程或足迹", tint = TripLakeText) { sharedImporter.launch(arrayOf("application/vnd.triptrail.journey", "application/json", "text/plain", "*/*")) } } }
-        item { SettingsGroup("数据与隐私") { SettingsRow(Icons.Default.Security, "数据存在本机", tint = TripLakeText); GroupDivider(); SettingsRow(Icons.Default.WarningAmber, "卸载 App 会清除本地数据", subtitle = "换机或卸载前请先导出完整备份。", tint = Color(0xFFB06A35)) } }
+        item { SettingsGroup("接收分享") { SettingsRow(Icons.Outlined.SystemUpdateAlt, "导入旅程或足迹", tint = TripLakeText) { sharedImporter.launch(arrayOf("application/vnd.triptrail.journey", "application/json", "text/plain", "*/*")) } } }
+        item { SettingsGroup("数据与隐私") { SettingsRow(Icons.Outlined.Shield, "数据存在本机", tint = TripLakeText); GroupDivider(); SettingsRow(Icons.Default.WarningAmber, "卸载 App 会清除本地数据", subtitle = "换机或卸载前请先导出完整备份。", tint = Color(0xFFB06A35)) } }
         item { SettingsGroup("关于") { SettingsRow(Icons.Default.Person, "创作者", trailing = { Row(verticalAlignment = Alignment.CenterVertically) { Text("黄逸轩", color = Color.Gray); Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) } }) { creator = true }; GroupDivider(); SettingsValueRow("版本", "0.1.0"); GroupDivider(); SettingsValueRow("系统要求", "Android 8.0+") } }
     }
 
@@ -129,7 +132,7 @@ fun SettingsScreen(
         val restored = prepared.content
         val mediaCount = restored.backupMediaReferences().distinctBy { it.id }.size
         fun cancel() { prepared.discard(); pendingRestore = null }
-        AlertDialog(
+        AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(),
             onDismissRequest = ::cancel,
             title = { Text("恢复这份备份？") },
             text = { Text("备份包含 ${restored.trips.size} 段旅程、${restored.stories.size} 个足迹、${restored.favorites.size} 个收藏、$mediaCount 个媒体文件。恢复后将替换本机当前所有数据，此操作不可撤销。") },
@@ -140,7 +143,7 @@ fun SettingsScreen(
     pendingShared?.let { prepared ->
         val (trip, story) = prepared.content
         fun cancel() { prepared.discard(); pendingShared = null }
-        AlertDialog(
+        AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(),
             onDismissRequest = ::cancel,
             title = { Text("收藏这份内容？") },
             text = { Text("“${trip?.title ?: story?.title}”会追加为独立副本，不会覆盖已有内容。") },
@@ -162,7 +165,7 @@ fun SettingsScreen(
             }) { Text("添加到我的旅迹") } },
         )
     }
-    if (creator) AlertDialog(
+    if (creator) AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(),
         onDismissRequest = { creator = false },
         shape = RoundedCornerShape(28.dp),
         containerColor = TripSurface,
@@ -176,24 +179,24 @@ fun SettingsScreen(
         },
         confirmButton = { TextButton(onClick = { creator = false }) { Text("完成") } },
     )
-    message?.let { AlertDialog(onDismissRequest = { message = null }, title = { Text("提示") }, text = { Text(it) }, confirmButton = { TextButton(onClick = { message = null }) { Text("好") } }) }
+    message?.let { AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(), onDismissRequest = { message = null }, title = { Text("提示") }, text = { Text(it) }, confirmButton = { TextButton(onClick = { message = null }) { Text("好") } }) }
 }
 
 @Composable
 private fun SettingsGroup(title: String, footer: String? = null, content: @Composable ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF818185), modifier = Modifier.padding(start = 16.dp))
-        Surface(shape = RoundedCornerShape(24.dp), color = TripSurface) { Column(Modifier.fillMaxWidth(), content = content) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyLarge, color = Color(0xFF818185), modifier = Modifier.padding(start = 16.dp))
+        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) { Column(Modifier.fillMaxWidth(), content = content) }
         footer?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF818185), modifier = Modifier.padding(horizontal = 16.dp)) }
     }
 }
 
 @Composable
-private fun SettingsRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String? = null, tint: androidx.compose.ui.graphics.Color = TripInk, trailing: @Composable (() -> Unit)? = null, action: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().then(if (action != null) Modifier.clickable(onClick = action) else Modifier).padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, style = MaterialTheme.typography.bodyLarge, color = if (action != null) TripLakeText else TripInk); subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color.Gray) } }; trailing?.invoke()
+private fun SettingsRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String? = null, tint: androidx.compose.ui.graphics.Color = TripInk, textColor: Color? = null, trailing: @Composable (() -> Unit)? = null, action: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().then(if (action != null) Modifier.clickable(onClick = action) else Modifier).heightIn(min = 52.dp).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.Normal, color = textColor ?: if (action != null) TripLakeText else MaterialTheme.colorScheme.onSurface); subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color.Gray) } }; trailing?.invoke()
     }
 }
 
 @Composable private fun SettingsValueRow(label: String, value: String) { Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp)) { Text(label); Spacer(Modifier.weight(1f)); Text(value, color = Color.Gray) } }
-@Composable private fun GroupDivider() { HorizontalDivider(Modifier.padding(start = 52.dp, end = 14.dp), color = TripMist.copy(alpha = .45f)) }
+@Composable private fun GroupDivider() { HorizontalDivider(Modifier.padding(start = 52.dp, end = 14.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = .09f)) }

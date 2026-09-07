@@ -33,8 +33,8 @@ class SmartImportParserTest {
     fun parsesNavigationMetricsAndMode() {
         val day = parseDate("2026-09-10")!!
         val draft = SmartImportParser.parse("灵隐寺\n步行导航\n4.4 公里 · 11 分钟\n10:30 - 12:00", day, combineDateAndTime(day, "09:00")!!)
-        assertEquals(TransportMode.WALK, draft.transport)
-        assertTrue(draft.distanceText.contains("4.4"))
+        assertEquals(TransportMode.CAR, draft.transport)
+        assertEquals("", draft.distanceText)
         assertEquals("10:30", draft.startTime.timeText())
     }
 

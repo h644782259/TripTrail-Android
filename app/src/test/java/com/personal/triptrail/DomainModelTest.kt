@@ -22,6 +22,79 @@ import java.util.Base64
 
 class DomainModelTest {
     @Test
+    fun explicitDatesReplaceBlankScheduleButDayScopedImportKeepsOtherDays() {
+        val start = parseDate("2026-09-10")!!
+        val later = parseDate("2026-09-25")!!
+        val days = (0..2).map { TripDay(date = start + it * 86_400_000L, sortOrder = it) }
+        val trip = Trip(title = "杭州", destination = "杭州", startDate = start, endDate = days.last().date, days = days)
+        val draft = listOf(RecognizedJourneyDay(1, later, "西湖", "", listOf(ItineraryItem(title = "西湖", startTime = later, endTime = later + 3_600_000))))
+        val result = trip.importingRecognizedJourney(draft)
+        assertEquals(1, result.days.size)
+        assertEquals(days.first().id, result.days.first().id)
+        assertEquals(later, result.startDate)
+        assertEquals(later, result.endDate)
+        val scoped = trip.importingRecognizedJourney(draft, days[1].id)
+        assertEquals(3, scoped.days.size)
+        assertEquals(1, scoped.days[1].items.size)
+        assertEquals(days[1].date, scoped.days[1].items.first().startTime.startOfDay())
+    }
+
+    @Test
+    fun smartImportReusesEmptyDaysAndRebasesTimesWithoutOverwritingContent() {
+        val start = parseDate("2026-09-10")!!
+        val next = parseDate("2026-09-11")!!
+        val last = parseDate("2026-09-12")!!
+        val original = ItineraryItem(title = "原安排", startTime = next, endTime = next + 3_600_000)
+        val empty = TripDay(date = start)
+        val busy = TripDay(date = next, items = listOf(original), sortOrder = 1)
+        val empty2 = TripDay(date = last, sortOrder = 2)
+        val trip = Trip(title = "杭州", destination = "杭州", startDate = start, endDate = last, days = listOf(empty, busy, empty2))
+        val drafts = (1..3).map { day -> RecognizedJourneyDay(day, null, "第 $day 天", "", listOf(ItineraryItem(title = "新安排$day", startTime = start + 9 * 3_600_000, endTime = start + 10 * 3_600_000))) }
+        val result = trip.importingRecognizedJourney(drafts)
+        assertEquals(4, result.days.size)
+        assertEquals(listOf(empty.id, busy.id, empty2.id), result.days.take(3).map { it.id })
+        assertEquals(listOf(original), result.days[1].items)
+        assertEquals(listOf(1, 1, 1, 1), result.days.map { it.items.size })
+        result.days.forEach { day -> day.items.forEach { assertEquals(day.date.startOfDay(), it.startTime.startOfDay()) } }
+        assertEquals(0, trip.days.first().items.size)
+    }
+
+    @Test
+    fun smartNewJourneyGeneratesDaysAndMergesExplicitDates() {
+        val start = parseDate("2026-09-10")!!
+        val third = parseDate("2026-09-12")!!
+        val base = Trip(title = "杭州之旅", destination = "杭州", startDate = start, endDate = start)
+        fun item(title: String) = ItineraryItem(title = title, startTime = start + 9 * 3_600_000, endTime = start + 10 * 3_600_000)
+        val trip = base.importingRecognizedJourney(listOf(RecognizedJourneyDay(1, start, "西湖", "", listOf(item("西湖"))), RecognizedJourneyDay(3, third, "返程", "", listOf(item("返程")))))
+        assertEquals(3, trip.days.size)
+        assertTrue(trip.days[1].items.isEmpty())
+        assertEquals(third, trip.endDate)
+        val updated = trip.importingRecognizedJourney(listOf(RecognizedJourneyDay(1, third, "追加", "", listOf(item("新安排")))))
+        assertEquals(3, updated.days.size)
+        assertEquals(setOf("返程", "新安排"), updated.days[2].items.map { it.title }.toSet())
+        assertEquals(trip.days[2].id, updated.days[2].id)
+    }
+
+    @Test
+    fun retiredRouteFieldsAreIgnoredByRecognitionAndOmittedFromSharing() {
+        val day = parseDate("2026-09-10")!!
+        val payload = JSONObject("""{"schemaVersion":2,"kind":"itinerary_item","item":{"title":"游览西湖","placeName":"西湖","transport":{"unexpected":true},"distanceText":["旧路程"],"routeInfo":42,"cost":80}}""")
+        val item = com.personal.triptrail.util.ZhipuRecognitionService.parsePayload(payload, day, day)
+        assertEquals("西湖", item.placeName)
+        assertEquals("", item.distanceText)
+        assertEquals(TransportMode.CAR, item.transport)
+        assertEquals(80.0, item.cost, 0.001)
+        val legacyItem = item.copy(transport = TransportMode.WALK, distanceText = "旧路程")
+        val trip = Trip(title = "西湖", destination = "杭州", startDate = day, endDate = day, days = listOf(TripDay(date = day, items = listOf(legacyItem))))
+        val exported = JSONObject(TripFileService.shareTrip(trip)).getJSONObject("trip").getJSONArray("days").getJSONObject(0).getJSONArray("items").getJSONObject(0)
+        assertTrue(!exported.has("transportRaw"))
+        assertTrue(!exported.has("distanceText"))
+        val imported = legacyItem.importedFromFavorite(day)
+        assertEquals("", imported.distanceText)
+        assertEquals(TransportMode.CAR, imported.transport)
+    }
+
+    @Test
     fun timelineOrdersCurrentThenUpcomingThenHistory() {
         val today = parseDate("2026-08-31")!!
         val current = Trip(title = "当前", destination = "杭州", startDate = parseDate("2026-08-30")!!, endDate = parseDate("2026-09-01")!!)
