@@ -441,7 +441,7 @@ private fun TravelStory.sharePreviewData(selectedIds: Set<String>): SharePreview
                 SharePreviewItem(
                     id = entry.id,
                     title = entry.title.ifBlank { "未命名记录" },
-                    time = entry.timeLabel.ifBlank { entry.startTime?.timeText().orEmpty() },
+                    time = "",
                     detail = listOf(entry.locationSummary, entry.note).filter { it.isNotBlank() }.joinToString(" · "),
                     completed = true,
                     media = entry.media.sortedBy { it.sortOrder },

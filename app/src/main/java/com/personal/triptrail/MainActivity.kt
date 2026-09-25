@@ -29,6 +29,11 @@ class MainActivity : ComponentActivity() {
         incomingVersion.value += 1
     }
 
+    override fun onResume() {
+        super.onResume()
+        com.personal.triptrail.util.TemporaryFileCleanup.sweepShares(applicationContext)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -38,6 +43,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        com.personal.triptrail.util.TemporaryFileCleanup.start(applicationContext)
         val repository = TripRepository(applicationContext)
         receiveFile(intent)
         setContent {

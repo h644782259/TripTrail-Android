@@ -29,6 +29,10 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?, incomingVer
     var storyId by rememberSaveable { mutableStateOf<String?>(null) }
     var showsStatistics by rememberSaveable { mutableStateOf(false) }
     var incoming by remember { mutableStateOf<PreparedImport<Pair<Trip?, TravelStory?>>?>(null) }
+    DisposableEffect(incoming) {
+        val prepared = incoming
+        onDispose { prepared?.discard() }
+    }
     var incomingError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(repository) {
@@ -39,13 +43,20 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?, incomingVer
     }
 
     LaunchedEffect(initialSharedUri, incomingVersion) {
-        if (initialSharedUri != null) runCatching {
-            withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(initialSharedUri)?.use { PortablePackageService(context).prepareShared(it) }
-                    ?: error("无法打开分享文件")
-            }
+        if (initialSharedUri != null) {
+            var prepared: PreparedImport<Pair<Trip?, TravelStory?>>? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    prepared = context.contentResolver.openInputStream(initialSharedUri)?.use { PortablePackageService(context).prepareShared(it) }
+                        ?: error("无法打开分享文件")
+                }
+                incoming?.discard()
+                incoming = prepared
+                prepared = null
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+            catch (error: Exception) { incomingError = error.message ?: "无法读取分享文件" }
+            finally { prepared?.discard() }
         }
-            .onSuccess { incoming = it }.onFailure { incomingError = it.message ?: "无法读取分享文件" }
     }
 
     Scaffold(
@@ -85,6 +96,7 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?, incomingVer
                 if (exists) prepared.discard()
                 else if (trip != null) repository.replaceAll(current.copy(trips = current.trips + trip))
                 else if (story != null) repository.replaceAll(current.copy(stories = current.stories + story))
+                prepared.commit()
                 incoming = null
             }) { Text("添加到我的旅迹") } },
         )

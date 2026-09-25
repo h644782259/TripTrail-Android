@@ -61,24 +61,48 @@ fun SettingsScreen(
     var message by remember { mutableStateOf<String?>(null) }
     var pendingRestore by remember { mutableStateOf<PreparedImport<AppData>?>(null) }
     var pendingShared by remember { mutableStateOf<PreparedImport<Pair<Trip?, TravelStory?>>?>(null) }
+    DisposableEffect(pendingRestore) {
+        val restore = pendingRestore
+        onDispose { restore?.discard() }
+    }
+    DisposableEffect(pendingShared) {
+        val shared = pendingShared
+        onDispose { shared?.discard() }
+    }
     var creator by remember { mutableStateOf(false) }
     val backupExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.triptrail.backup")) { uri ->
         if (uri != null) runCatching { context.contentResolver.openOutputStream(uri)?.use { TripBackupService(context).write(data, it) } }.onSuccess { message = "完整备份已导出，请保存到安全位置。" }.onFailure { message = "导出失败：${it.localizedMessage}" }
     }
     val backupImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
-            runCatching { withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { TripBackupService(context).prepareRead(it) }
-                    ?: error("无法打开文件")
-            } }.onSuccess { pendingRestore = it }.onFailure { message = "无法读取备份：${it.localizedMessage}" }
+            var prepared: PreparedImport<AppData>? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    prepared = context.contentResolver.openInputStream(uri)?.use { TripBackupService(context).prepareRead(it) }
+                        ?: error("无法打开文件")
+                }
+                pendingRestore?.discard()
+                pendingRestore = prepared
+                prepared = null
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+            catch (error: Exception) { message = "无法读取备份：${error.localizedMessage}" }
+            finally { prepared?.discard() }
         }
     }
     val sharedImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
-            runCatching { withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { PortablePackageService(context).prepareShared(it) }
-                    ?: error("无法打开文件")
-            } }.onSuccess { pendingShared = it }.onFailure { message = "无法读取分享文件：${it.localizedMessage}" }
+            var prepared: PreparedImport<Pair<Trip?, TravelStory?>>? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    prepared = context.contentResolver.openInputStream(uri)?.use { PortablePackageService(context).prepareShared(it) }
+                        ?: error("无法打开文件")
+                }
+                pendingShared?.discard()
+                pendingShared = prepared
+                prepared = null
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+            catch (error: Exception) { message = "无法读取分享文件：${error.localizedMessage}" }
+            finally { prepared?.discard() }
         }
     }
 
@@ -137,7 +161,7 @@ fun SettingsScreen(
             title = { Text("恢复这份备份？") },
             text = { Text("备份包含 ${restored.trips.size} 段旅程、${restored.stories.size} 个足迹、${restored.favorites.size} 个收藏、$mediaCount 个媒体文件。恢复后将替换本机当前所有数据，此操作不可撤销。") },
             dismissButton = { TextButton(onClick = ::cancel) { Text("取消") } },
-            confirmButton = { Button(onClick = { repository.replaceAll(restored); pendingRestore = null; message = "恢复完成。" }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("替换本机数据") } },
+            confirmButton = { Button(onClick = { repository.replaceAll(restored); prepared.commit(); pendingRestore = null; message = "恢复完成。" }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("替换本机数据") } },
         )
     }
     pendingShared?.let { prepared ->
@@ -161,6 +185,7 @@ fun SettingsScreen(
                     repository.replaceAll(current.copy(stories = current.stories + story))
                     message = "足迹已添加到我的旅迹。"
                 }
+                prepared.commit()
                 pendingShared = null
             }) { Text("添加到我的旅迹") } },
         )

@@ -65,7 +65,7 @@ class TripBackupService(private val context: Context) {
                             val sourceName = entry.name.substringAfterLast('/')
                             val id = sourceName.substringBeforeLast('.')
                             val suffix = sourceName.substringAfterLast('.', "bin")
-                            val target = File(restoreDir, "$id-restored.$suffix")
+                            val target = File(restoreDir, "$id-restored-${java.util.UUID.randomUUID()}.$suffix")
                             target.outputStream().use { zip.copyTo(it) }
                             restoredFiles += target
                             restored[id] = Uri.fromFile(target).toString()

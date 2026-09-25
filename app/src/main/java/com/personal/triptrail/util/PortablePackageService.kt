@@ -90,9 +90,12 @@ class PreparedImport<T> internal constructor(
     val content: T,
     private val importedFiles: List<File> = emptyList(),
 ) {
+    private var committed = false
+    fun commit() { committed = true }
+
     /** Removes media copied while the confirmation dialog was being prepared. */
     fun discard() {
-        importedFiles.forEach(File::delete)
+        if (!committed) importedFiles.forEach(File::delete)
     }
 }
 

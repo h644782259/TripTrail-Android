@@ -114,7 +114,7 @@ fun FavoritesScreen(repository: TripRepository, favorites: List<ItineraryItem>, 
             onDismiss = { smartTarget = null; smartDraft = target; creating = true },
             onRecognized = { result ->
                 smartTarget = null
-                smartDraft = result.item.copy(id = target.id, isFavorite = true, favoriteCreatedAt = target.favoriteCreatedAt, media = target.media)
+                smartDraft = result.item.copy(id = target.id, favoriteCity = result.item.favoriteCity.trim().ifBlank { target.favoriteCity }, isFavorite = true, favoriteCreatedAt = target.favoriteCreatedAt, media = target.media)
                 creating = true
             },
         )
@@ -166,13 +166,13 @@ private fun FavoriteFilterBar(count: Int, selected: PlaceCategory?, onSelect: (P
 private fun FavoriteCard(favorite: ItineraryItem, onEdit: () -> Unit, onDelete: () -> Unit, onNavigate: (JourneyLocationTarget) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Surface(
-        modifier = Modifier.fillMaxWidth().height(280.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)),
+        modifier = Modifier.fillMaxWidth().height(260.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)),
         onClick = onEdit,
         shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(.8.dp, TripMist.copy(alpha = .42f)), shadowElevation = 2.dp,
     ) {
         Box {
-            Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 Surface(shape = RoundedCornerShape(14.dp), color = TripLake.copy(alpha = .11f)) {
                     Row(Modifier.padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(favorite.category.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(5.dp))

@@ -66,6 +66,9 @@ object ShareExportService {
             target.outputStream().use {
                 check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)) { "分享图生成失败，请稍后重试。" }
             }
+        } catch (error: Throwable) {
+            target.delete()
+            throw error
         } finally {
             bitmap.recycle()
         }
@@ -78,8 +81,8 @@ object ShareExportService {
             "footprint" -> "足迹"
             else -> "分享"
         }
-        val target = shareDirectory(context).resolve("旅迹-${kind}-${safeName(title)}.triptrail")
-        target.writeText(content)
+        val target = shareDirectory(context).resolve("旅迹-${kind}-${safeName(title)}-${java.util.UUID.randomUUID()}.triptrail")
+        try { target.writeText(content) } catch (error: Throwable) { target.delete(); throw error }
         share(context, target, "application/vnd.triptrail.journey", "发送可导入内容")
     }
 
@@ -91,7 +94,13 @@ object ShareExportService {
             clipData = ClipData.newUri(context.contentResolver, chooserTitle, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(Intent.createChooser(intent, chooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        try {
+            context.startActivity(Intent.createChooser(intent, chooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            TemporaryFileCleanup.schedule(context)
+        } catch (error: Throwable) {
+            file.delete()
+            throw error
+        }
     }
 
     internal fun renderImage(data: SharePreviewData): Bitmap {
