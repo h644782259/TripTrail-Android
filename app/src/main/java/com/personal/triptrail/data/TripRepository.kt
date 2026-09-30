@@ -20,27 +20,46 @@ class TripRepository(private val context: Context) {
     private val _data = MutableStateFlow(normalizeSchedules(load()).autoCompleteElapsed())
     val data: StateFlow<AppData> = _data.asStateFlow()
 
+    private val cloudEditEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    val cloudEdits: kotlinx.coroutines.flow.SharedFlow<Unit> get() = cloudEditEvents
+
     @Synchronized
-    private fun mutate(block: (AppData) -> AppData) {
+    private fun mutate(notifyCloud: Boolean = true, block: (AppData) -> AppData) {
         val updated = normalizeSchedules(block(_data.value)).autoCompleteElapsed()
-        _data.value = updated
         val temporary = File(dataFile.parentFile, "${dataFile.name}.tmp")
-        temporary.writeText(json.encodeToString(updated))
-        if (!temporary.renameTo(dataFile)) {
-            dataFile.writeText(temporary.readText())
-            temporary.delete()
+        temporary.outputStream().use { output ->
+            output.write(json.encodeToString(updated).toByteArray(Charsets.UTF_8))
+            output.fd.sync()
         }
+        try {
+            java.nio.file.Files.move(temporary.toPath(), dataFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            java.nio.file.Files.move(temporary.toPath(), dataFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+        // Publish only after the local copy is durable; failed cloud imports leave the old state visible.
+        _data.value = updated
+        if (notifyCloud) cloudEditEvents.tryEmit(Unit)
     }
 
     private fun load(): AppData = runCatching {
         if (dataFile.exists()) json.decodeFromString<AppData>(dataFile.readText()) else AppData()
     }.getOrElse { AppData() }
 
-    fun replaceAll(data: AppData) = mutate { data }
+    internal fun removeForRecycle(id: String, kind: String) {
+        val current = _data.value
+        val next = when (kind) {
+            "trip" -> current.copy(trips = current.trips.filterNot { it.id.equals(id, true) })
+            "story" -> current.copy(stories = current.stories.filterNot { it.id.equals(id, true) })
+            "favorite" -> current.copy(favorites = current.favorites.filterNot { it.id.equals(id, true) })
+            else -> current
+        }
+        if (next != current) mutate(notifyCloud = false) { next }
+    }
+    fun replaceAll(data: AppData) = mutate(notifyCloud = false) { data }
     fun refreshAutomaticStatuses() {
         val current = _data.value
         val refreshed = current.autoCompleteElapsed()
-        if (refreshed != current) mutate { refreshed }
+        if (refreshed != current) mutate(notifyCloud = false) { refreshed }
     }
     fun exportJson(): String = json.encodeToString(_data.value)
     fun decodeJson(value: String): AppData = json.decodeFromString(value)
@@ -59,7 +78,10 @@ class TripRepository(private val context: Context) {
     }
 
     fun updateTrip(updated: Trip) = mutate { data -> data.copy(trips = data.trips.map { if (it.id == updated.id) updated.withSynchronizedDates() else it }) }
-    fun deleteTrip(id: String) = mutate { data -> data.copy(trips = data.trips.filterNot { it.id == id }) }
+    fun deleteTrip(id: String) {
+        com.personal.triptrail.util.CloudSyncService.get(context).trash(id, "trip", this)
+        cloudEditEvents.tryEmit(Unit)
+    }
 
     fun addDay(tripId: String): TripDay? {
         var created: TripDay? = null
@@ -130,7 +152,7 @@ class TripRepository(private val context: Context) {
         if (trip.id != tripId) trip else trip.copy(days = trip.days.map { day ->
             if (day.id != dayId) day else {
                 val exists = day.items.any { it.id == item.id }
-                val normalized = item.copy(
+                val normalized = item.onScheduleDay(day.date).copy(
                     sortOrder = if (exists) item.sortOrder else day.items.size,
                     isAutomaticCompletionOverridden = false,
                 ).withAutomaticExecutionStatus()
@@ -307,10 +329,18 @@ class TripRepository(private val context: Context) {
         return story
     }
 
-    fun archiveTrip(tripId: String): TravelStory? {
+    fun archiveFinishedTrips(now: Long = System.currentTimeMillis()) {
+        val ended = _data.value.trips.filter { it.phase(now) == TripPhase.HISTORY }
+        for (trip in ended) {
+            if (!com.personal.triptrail.util.CloudSyncService.get(context).isDeleted("story:${trip.id.lowercase()}") && _data.value.stories.none { it.sourceTripId == trip.id }) archiveTrip(trip.id, automatic = true)
+        }
+    }
+
+    fun archiveTrip(tripId: String, automatic: Boolean = false): TravelStory? {
         val trip = _data.value.trips.firstOrNull { it.id == tripId } ?: return null
         val existing = _data.value.stories.firstOrNull { it.sourceTripId == tripId }
         val story = (existing ?: TravelStory(
+            id = if (automatic) trip.id else java.util.UUID.randomUUID().toString(),
             title = trip.title, destination = trip.destination, startDate = trip.startDate, endDate = trip.endDate,
             summary = trip.note, sourceTripId = trip.id
         )).copy(
@@ -342,7 +372,10 @@ class TripRepository(private val context: Context) {
     }
 
     fun updateStory(updated: TravelStory) = mutate { data -> data.copy(stories = data.stories.map { if (it.id == updated.id) updated else it }) }
-    fun deleteStory(id: String) = mutate { data -> data.copy(stories = data.stories.filterNot { it.id == id }) }
+    fun deleteStory(id: String) {
+        com.personal.triptrail.util.CloudSyncService.get(context).trash(id, "story", this)
+        cloudEditEvents.tryEmit(Unit)
+    }
 
     fun addStoryDay(storyId: String): StoryDay? {
         var created: StoryDay? = null
@@ -390,7 +423,10 @@ class TripRepository(private val context: Context) {
         data.copy(favorites = if (exists) data.favorites.map { if (it.id == favorite.id) normalized else it } else data.favorites + normalized)
     }
 
-    fun deleteFavorite(id: String) = mutate { data -> data.copy(favorites = data.favorites.filterNot { it.id == id }) }
+    fun deleteFavorite(id: String) {
+        com.personal.triptrail.util.CloudSyncService.get(context).trash(id, "favorite", this)
+        cloudEditEvents.tryEmit(Unit)
+    }
 
     fun importFavorites(tripId: String, dayId: String, favoriteIds: Set<String>): Int {
         var count = 0
@@ -433,113 +469,6 @@ class TripRepository(private val context: Context) {
         val target = File(mediaDirectory, "${java.util.UUID.randomUUID()}.$extension")
         context.contentResolver.openInputStream(uri).use { input -> target.outputStream().use { output -> requireNotNull(input).copyTo(output) } }
         return MediaReference(localUri = Uri.fromFile(target).toString(), kind = kind)
-    }
-
-    @SuppressLint("ResourceType")
-    fun addSampleData(): Boolean {
-        // The first Android seed accidentally created several empty days/trips. Repair only
-        // that recognizable seed; never overwrite arbitrary user data.
-        if (_data.value.hasLegacyIncompleteSample()) {
-            mutate { sampleData() }
-            return true
-        }
-        // Keep existing user content, while making the sample action useful even after the
-        // user has already created/imported something. Add each missing sample by title so a
-        // second tap remains idempotent instead of duplicating the demo content.
-        val seed = sampleData()
-        val current = _data.value
-        val merged = current.copy(
-            trips = current.trips + seed.trips.filterNot { sample -> current.trips.any { it.title == sample.title } },
-            stories = current.stories + seed.stories.filterNot { sample -> current.stories.any { it.title == sample.title } },
-            favorites = current.favorites + seed.favorites.filterNot { sample -> current.favorites.any { it.title == sample.title } },
-        )
-        if (merged == current) return false
-        mutate { merged }
-        return true
-    }
-
-    private fun AppData.hasLegacyIncompleteSample(): Boolean {
-        val legacyTitles = setOf("杭州山水接川西", "上海周末城市漫步", "西湖慢游三日", "苏州园林小住", "厦门海风四日")
-        return trips.size == 5 && trips.map { it.title }.toSet() == legacyTitles &&
-            trips.first().days.size == 8 && trips.first().days.drop(1).all { it.items.isEmpty() } &&
-            trips.drop(1).all { trip -> trip.days.all { it.items.isEmpty() } }
-    }
-
-    private fun sampleData(): AppData {
-        val today = System.currentTimeMillis().startOfDay()
-        fun date(offset: Int) = today.localDate().plusDays(offset.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        fun at(day: Long, hour: Int, minute: Int = 0) = day.localDate().atTime(hour, minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        fun item(day: Long, title: String, category: PlaceCategory, start: String, end: String, order: Int,
-                 place: String = title, placeAddress: String = "", note: String = "",
-                 duration: Int = 60, reservation: String = "", cost: Double = 0.0,
-                 completed: Boolean = false, media: List<MediaReference> = emptyList()) = ItineraryItem(
-            title = title, category = category, startTime = at(day, start.substringBefore(':').toInt(), start.substringAfter(':').toInt()),
-            endTime = at(day, end.substringBefore(':').toInt(), end.substringAfter(':').toInt()), address = placeAddress, note = note,
-            placeName = place, placeAddress = placeAddress,
-            playDurationMinutes = duration, reservationInfo = reservation, cost = cost, isCompleted = completed,
-            executionStatus = if (completed) ItineraryExecutionStatus.COMPLETED else ItineraryExecutionStatus.NOT_STARTED,
-            sortOrder = order, media = media,
-        )
-
-        val favorites = listOf(
-            ItineraryItem(title = "羊卓雍措", category = PlaceCategory.ATTRACTION, placeName = "羊卓雍措", note = "2号观景台更出片", cost = 100.0, isFavorite = true, favoriteCreatedAt = System.currentTimeMillis() - 3_000),
-            ItineraryItem(title = "品尝杭帮菜", category = PlaceCategory.RESTAURANT, placeName = "楼外楼（孤山店）", note = "尝试西湖醋鱼和龙井虾仁，用餐后可在孤山稍作休息。", cost = 328.0, isFavorite = true, favoriteCreatedAt = System.currentTimeMillis() - 2_000),
-            ItineraryItem(title = "Wk Road", category = PlaceCategory.ATTRACTION, placeName = "Shanghai Wukang Road", isFavorite = true, favoriteCreatedAt = System.currentTimeMillis() - 1_000),
-        )
-        val sampleImageFile = File(mediaDirectory, "journey-lake-sample.png")
-        runCatching {
-            if (!sampleImageFile.exists()) context.resources.openRawResource(R.drawable.journey_lake_hero).use { input -> sampleImageFile.outputStream().use { input.copyTo(it) } }
-        }
-        val lakeMedia = MediaReference(localUri = Uri.fromFile(sampleImageFile).toString())
-        val currentStart = date(-1); val currentToday = date(0); val currentEnd = date(1)
-        val current = Trip(
-            title = "杭州湖畔慢游（测试）", destination = "杭州", startDate = currentStart, endDate = currentEnd,
-            note = "覆盖路线、预约、费用、导航、照片和视频的完整测试旅程。",
-            days = listOf(
-                TripDay(date = currentStart, title = "抵达杭州", sortOrder = 0, items = listOf(
-                    item(currentStart, "抵达杭州东站", PlaceCategory.TRANSPORT, "09:10", "09:40", 0, "杭州东站", note = "从东广场出站，乘地铁前往酒店。", duration = 30, reservation = "G7311 · 08车12A", cost = 73.0, completed = true),
-                    item(currentStart, "入住湖滨酒店", PlaceCategory.HOTEL, "10:30", "11:00", 1, "湖滨酒店", note = "先寄存行李，下午两点后领取房卡。", duration = 30, reservation = "预订号 TT20260830", cost = 688.0, completed = true),
-                    item(currentStart, "补充旅行用品", PlaceCategory.OTHER, "11:10", "11:25", 2, "湖滨银泰 in77", note = "检查充电宝、纸巾和备用电池。", duration = 15, cost = 96.5),
-                )),
-                TripDay(date = currentToday, title = "西湖环线", sortOrder = 1, items = listOf(
-                    item(currentToday, "游览断桥残雪", PlaceCategory.ATTRACTION, "08:00", "09:30", 0, "断桥残雪", note = "从北山街慢慢走到平湖秋月，拍一段湖面晨光。", duration = 90, reservation = "无需预约", media = listOf(lakeMedia)),
-                    item(currentToday, "在楼外楼用餐", PlaceCategory.RESTAURANT, "11:30", "13:00", 1, "楼外楼（孤山店）", note = "预留临窗位，尝试西湖醋鱼与龙井虾仁。", duration = 90, reservation = "12:00 · 2人 · 手机尾号 0830", cost = 328.0),
-                    item(currentToday, "购买旅行伴手礼", PlaceCategory.OTHER, "15:20", "17:00", 2, "河坊街", note = "茶叶和桂花糕控制在一个手提袋内。", duration = 100, cost = 180.0),
-                )),
-                TripDay(date = currentEnd, title = "茶园与返程", sortOrder = 2, items = listOf(
-                    item(currentEnd, "漫步龙井村茶园", PlaceCategory.SPECIAL, "09:00", "11:30", 0, "龙井村茶园", note = "天气合适就沿十里琅珰走一小段。", duration = 150, reservation = "茶室预约 09:30", cost = 120.0),
-                    item(currentEnd, "乘坐返程高铁", PlaceCategory.TRANSPORT, "17:05", "18:10", 1, "杭州东站", note = "提前四十分钟到站。", duration = 65, reservation = "G7590 · 05车06F", cost = 73.0),
-                )),
-            ),
-        )
-        val upcomingDay = date(7)
-        val upcoming = Trip(
-            title = "上海周末城市漫步（测试）", destination = "上海", startDate = upcomingDay, endDate = date(8),
-            note = "用于查看即将出发状态与跨系统分享效果。", days = listOf(TripDay(date = upcomingDay, title = "建筑与夜色", sortOrder = 0, items = listOf(
-                item(upcomingDay, "虹桥机场集合", PlaceCategory.TRANSPORT, "08:00", "09:00", 0, "上海虹桥国际机场 T2", "上海市长宁区虹桥路2550号", "测试飞机交通方式与预约信息。", 60, "MU5101 · 登机口 C52", 860.0),
-                item(upcomingDay, "外滩夜景", PlaceCategory.ATTRACTION, "18:30", "20:30", 1, "外滩", "上海市黄浦区中山东一路", "蓝调时刻前到达，测试城市照片展示。", 120),
-            ))))
-        val historyDay = date(-45)
-        val history = Trip(
-            title = "厦门海风旧游（测试）", destination = "厦门", startDate = historyDay, endDate = date(-42),
-            note = "用于查看历史旅程、全部完成进度与归档入口。", days = listOf(TripDay(date = historyDay, title = "鼓浪屿一日", sortOrder = 0, items = listOf(
-                item(historyDay, "乘船前往鼓浪屿", PlaceCategory.TRANSPORT, "08:10", "08:35", 0, "厦门邮轮中心厦鼓码头", note = "刷身份证登船。", duration = 25, reservation = "08:10 船票", cost = 35.0, completed = true),
-                item(historyDay, "游览菽庄花园与钢琴博物馆", PlaceCategory.ATTRACTION, "09:20", "11:40", 1, "菽庄花园与钢琴博物馆", note = "旧旅程全部完成。", duration = 140, cost = 30.0, completed = true),
-            ))))
-        val trips = listOf(current, upcoming, history)
-
-        fun story(title: String, destination: String, offset: Int, summary: String, cover: Boolean = true): TravelStory {
-            val media = lakeMedia.copy(id = java.util.UUID.randomUUID().toString())
-            val entry = StoryEntry(title = "旅途片段", placeName = destination, note = summary, media = if (cover) listOf(media.copy()) else emptyList())
-            val day = StoryDay(date = date(offset), title = "第 1 天", entries = listOf(entry))
-            return TravelStory(title = title, destination = destination, startDate = date(offset), endDate = date(offset + 2), summary = summary, coverMedia = if (cover) media else null, days = listOf(day))
-        }
-        val stories = listOf(
-            story("杭州湖畔慢游 · 足迹（测试）", "杭州", 0, "从测试旅程同步而来的足迹，用于验证源旅程同步、照片视频和逐日记录。"),
-            story("上海夜色收藏（测试）", "上海", -12, "独立创建的足迹，不关联任何旅程，用于验证收藏导入后的编辑体验。"),
-            story("厦门海风手记（测试）", "厦门", -45, "纯文字足迹，用于检查没有媒体时的占位状态与长文本排版。", cover = false),
-        )
-        return AppData(trips = trips, favorites = favorites, stories = stories)
     }
 
     private fun AppData.autoCompleteElapsed(now: Long = System.currentTimeMillis()): AppData = copy(trips = trips.map { trip -> trip.copy(days = trip.days.map { day ->

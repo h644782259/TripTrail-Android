@@ -315,9 +315,7 @@ private fun ShareDayCard(index: Int, dayCount: Int, day: SharePreviewDay) {
                     Text(day.heading, style = MaterialTheme.typography.titleMedium, color = TripInk, fontWeight = FontWeight.Bold, maxLines = 2)
                     Text(day.date, style = MaterialTheme.typography.bodySmall, color = TripInk.copy(.62f))
                 }
-                Surface(shape = RoundedCornerShape(50), color = ShareTimeBadge) {
-                    Text("${day.items.size} 个片段", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, color = TripLakeText, fontWeight = FontWeight.Bold)
-                }
+
             }
             if (day.narrative.isNotBlank()) Text(day.narrative, style = MaterialTheme.typography.bodySmall, color = TripInk.copy(.68f), lineHeight = 18.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
             if (day.items.isEmpty()) {
@@ -457,7 +455,7 @@ private fun TravelStory.sharePreviewData(selectedIds: Set<String>): SharePreview
         title = title,
         destination = destination,
         dateRange = if (first == last) first.fullDateText() else "${first.fullDateText()} — ${last.fullDateText()}",
-        summary = if (selected.size == 1) selected.first().note.ifBlank { "${selected.first().entries.size} 个当天片段" } else summary.ifBlank { "${selected.size} 天 · ${sections.sumOf { it.items.size }} 个旅行片段" },
+        summary = if (selected.size == 1) selected.first().note else summary,
         eyebrow = "TRAVEL MEMORY · 旅行足迹",
         scopeLabel = if (isAll) "整段足迹" else if (selected.size == 1) "单日足迹" else "多日足迹",
         scopeSummary = if (isAll) "整段足迹 · ${selected.size} 天" else "已选择 ${selected.size} 天 · ${sections.sumOf { it.items.size }} 个片段",

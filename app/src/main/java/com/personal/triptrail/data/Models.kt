@@ -190,6 +190,8 @@ data class StoryEntry(
     val cost: Double = 0.0,
     val sortOrder: Int = 0,
     val sourceItemId: String? = null,
+    val didPrefillSourceMemory: Boolean = false,
+    val sourceMemoryPrefill: String? = null,
     val media: List<MediaReference> = emptyList(),
 ) {
     val locationTargets: List<JourneyLocationTarget>
@@ -216,6 +218,7 @@ data class StoryDay(
     val details: String = "",
     val sortOrder: Int = 0,
     val sourceDayId: String? = null,
+    val didMigrateInlineSummary: Boolean = false,
     val entries: List<StoryEntry> = emptyList(),
 )
 
@@ -229,6 +232,8 @@ data class TravelStory(
     val summary: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val sourceTripId: String? = null,
+    val syncScopeRaw: String = "trip",
+    val sourceSelectionIDsRaw: String = "",
     val coverMedia: MediaReference? = null,
     val coverZoom: Double = 1.0,
     val coverOffsetX: Double = 0.0,
@@ -423,4 +428,13 @@ val ItineraryItem.favoriteCityLabel: String get() {
         }
     }
     return "未设置城市"
+}
+
+
+val Trip.licensePlateDisplay: String get() = formatLicensePlate(licensePlate)
+
+fun formatLicensePlate(input: String): String {
+    val value = input.filterNot { it.isWhitespace() || it == '·' }.uppercase(java.util.Locale.ROOT)
+    if (value.length <= 2 || value[0] !in "京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼" || value[1] !in 'A'..'Z') return value
+    return value.take(2) + "·" + value.drop(2)
 }

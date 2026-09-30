@@ -7,3 +7,6 @@ build/
 captures/
 .DS_Store
 .kotlin/
+
+# Machine-local cloud client configuration
+cloud.local.properties

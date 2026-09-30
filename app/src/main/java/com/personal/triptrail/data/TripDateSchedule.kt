@@ -23,3 +23,11 @@ fun Trip.withSynchronizedDates(zone: ZoneId = ZoneId.systemDefault()): Trip {
     }
     return copy(startDate = normalizedStart, endDate = normalizedDays.last().date, days = normalizedDays)
 }
+
+/** Place an arrangement on its owning day, retaining its clock time and duration. */
+fun ItineraryItem.onScheduleDay(dayDate: Long, zone: ZoneId = ZoneId.systemDefault()): ItineraryItem {
+    val date = Instant.ofEpochMilli(dayDate).atZone(zone).toLocalDate()
+    val time = Instant.ofEpochMilli(startTime).atZone(zone).toLocalTime()
+    val start = date.atTime(time).atZone(zone).toInstant().toEpochMilli()
+    return copy(startTime = start, endTime = start + (endTime - startTime).coerceAtLeast(60_000L))
+}

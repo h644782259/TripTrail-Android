@@ -17,13 +17,27 @@ class AmapRoutePlanTest {
             key to URLDecoder.decode(value, "UTF-8")
         }
 
+    @Test fun chooserCollapsesAdjacentRolesButKeepsReturnVisit() {
+        val a = com.personal.triptrail.data.JourneyLocationTarget(com.personal.triptrail.data.JourneyLocationRole.PLACE, "A", "地址A")
+        val arrival = a.copy(role = com.personal.triptrail.data.JourneyLocationRole.DESTINATION)
+        val b = a.copy(name = "B", address = "地址B")
+        assertEquals(listOf(a, b, a), com.personal.triptrail.util.adjacentRouteTargets(listOf(a, arrival, b, b, a)))
+    }
+
+    @Test fun adjacentDuplicatesCollapseWhileReturnVisitRemains() {
+        assertEquals(parameters(listOf(start, end, start)), parameters(listOf(start, start, end, end, start)))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun onlyIdenticalStopsCannotProduceRoute() { amapRouteUrl(listOf(start, start)) }
+
     @Test fun twoStopsIncludeCoordinatesWithoutWaypoints() {
         val query = parameters(listOf(start, end))
         assertEquals("39.9", query["slat"])
         assertEquals("116.3", query["slon"])
         assertEquals("40.0", query["dlat"])
         assertEquals("116.5", query["dlon"])
-        assertEquals("1", query["dev"])
+        assertEquals("0", query["dev"])
         assertEquals("0", query["t"])
         assertFalse(query.containsKey("vian"))
     }

@@ -3,10 +3,8 @@ package com.personal.triptrail.util
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.location.Geocoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.Locale
 import com.personal.triptrail.data.ItineraryItem
 import com.personal.triptrail.data.JourneyLocationTarget
 import com.personal.triptrail.data.StoryEntry
@@ -40,24 +38,11 @@ object ExternalApps {
         check(context.packageManager.getLaunchIntentForPackage("com.autonavi.minimap") != null) {
             "未检测到高德地图，请安装后重试。"
         }
+        val key = SecureRecognitionSettings(context).amapWebKey
+        require(key.isNotBlank()) { "请先在“我的 → 高德路线”中配置高德 Web 服务 Key。" }
         val stops = withContext(Dispatchers.IO) {
-            check(Geocoder.isPresent()) { "当前设备不支持地点坐标查询，暂时无法规划全行程路线。" }
-            val geocoder = Geocoder(context, Locale.CHINA)
-            // Resolve every selected point in itinerary order; never silently discard a failed stop.
-            targets.map { target ->
-                val name = target.displayName
-                require(name.isNotBlank()) { "路线中有未填写名称的地点。" }
-                val query = listOf(target.address.trim(), name).filter { it.isNotBlank() }.distinct().joinToString(" ")
-                @Suppress("DEPRECATION")
-                val matches = try {
-                    geocoder.getFromLocationName(query, 5).orEmpty()
-                } catch (error: java.io.IOException) {
-                    throw IllegalStateException("“$name”坐标查询失败，请检查网络后重试。", error)
-                }
-                val match = matches.firstOrNull { it.hasLatitude() && it.hasLongitude() }
-                    ?: throw IllegalArgumentException("没有找到“$name”的坐标，请补充准确地址后重试。")
-                AmapRouteStop(name, match.latitude, match.longitude)
-            }
+            val service = AmapPlaceService(key)
+            adjacentRouteTargets(targets).map { target -> resolveRoutePlace(target, service::search) }
         }
         val uri = Uri.parse(amapRouteUrl(stops))
         check(launch(context, Intent(Intent.ACTION_VIEW, uri).setPackage("com.autonavi.minimap"))) {

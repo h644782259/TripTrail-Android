@@ -35,11 +35,30 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?, incomingVer
     }
     var incomingError by remember { mutableStateOf<String?>(null) }
 
+    val cloud = com.personal.triptrail.util.CloudSyncService.get(context)
+    LaunchedEffect(repository) {
+        repository.cloudEdits.collect { cloud.uploadPending(repository) }
+    }
+    LaunchedEffect(tab, tripId, storyId, showsStatistics) {
+        when {
+            tripId != null -> cloud.sync(repository, kind = "trip", recordId = tripId, automatic = true)
+            storyId != null -> cloud.sync(repository, kind = "story", recordId = storyId, automatic = true)
+            !showsStatistics && tab == RootTab.TRIPS -> cloud.sync(repository, kind = "trip", automatic = true)
+            !showsStatistics && tab == RootTab.STORIES -> cloud.sync(repository, kind = "story", automatic = true)
+            !showsStatistics && tab == RootTab.FAVORITES -> cloud.sync(repository, kind = "favorite", automatic = true)
+        }
+    }
+
     LaunchedEffect(repository) {
         while (true) {
             repository.refreshAutomaticStatuses()
+            cloud.archiveFinishedTrips(repository)
             delay(30_000)
         }
+    }
+
+    LaunchedEffect(data.trips.map { it.id to it.endDate }) {
+        cloud.archiveFinishedTrips(repository)
     }
 
     LaunchedEffect(initialSharedUri, incomingVersion) {

@@ -113,6 +113,7 @@ internal fun SmartImportInputSheet(
                         } else {
                             TextField(
                                 value = text, onValueChange = { text = it }, enabled = !busy,
+                                trailingIcon = if (text.isNotEmpty()) ({ TripClearTextButton(text, { text = "" }, enabled = !busy) }) else null,
                                 placeholder = { Text(placeholder) }, modifier = Modifier.fillMaxWidth().height(220.dp),
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,

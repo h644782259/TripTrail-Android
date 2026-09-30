@@ -33,4 +33,18 @@ class TripDateScheduleTest {
         val updated = Trip(title = "行程", destination = "纽约", startDate = start, endDate = start, days = listOf(TripDay(date = old, items = listOf(item)))).withSynchronizedDates(zone)
         assertEquals(time("2026-03-09T09:00:00-04:00"), updated.days.single().items.single().startTime)
     }
+    @Test fun saveOnOwningDayFixesFutureDateAndCompletesElapsedFlight() {
+        val day = time("2026-09-28T00:00:00+08:00")
+        val item = ItineraryItem(startTime = time("2026-09-29T06:40:00+08:00"), endTime = time("2026-09-29T08:55:00+08:00"))
+        val repaired = item.onScheduleDay(day, zone).withAutomaticExecutionStatus(time("2026-09-28T21:00:00+08:00"))
+        assertEquals(time("2026-09-28T06:40:00+08:00"), repaired.startTime)
+        assertEquals(time("2026-09-28T08:55:00+08:00"), repaired.endTime)
+        assertTrue(repaired.isCompleted)
+    }
+
+    @Test fun savingCrossDayItemDoesNotShortenItsDuration() {
+        val item = ItineraryItem(startTime = time("2026-09-28T22:00:00+08:00"), endTime = time("2026-09-29T23:00:00+08:00"))
+        val repaired = item.onScheduleDay(time("2026-09-27T00:00:00+08:00"), zone)
+        assertEquals(time("2026-09-28T23:00:00+08:00"), repaired.endTime)
+    }
 }

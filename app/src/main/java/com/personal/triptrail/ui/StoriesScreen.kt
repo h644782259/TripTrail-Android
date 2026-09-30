@@ -60,15 +60,19 @@ fun StoriesScreen(repository: TripRepository, stories: List<TravelStory>, trips:
 
     Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            TripSearchField(search, "搜索名称、城市、地点或摘要", { search = it }, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), trailingContent = {
                 var yearMenu by remember { mutableStateOf(false) }
-                Box { TripRoundAction(Icons.Default.FilterList, "筛选年份") { yearMenu = true }; TripDropdownMenu(yearMenu, { yearMenu = false }) {
-                    DropdownMenuItem({ Text("全部年份") }, { selectedYear = null; yearMenu = false }, leadingIcon = { if (selectedYear == null) Icon(Icons.Default.Check, null) })
-                    years.forEach { year -> DropdownMenuItem({ Text("${year} 年") }, { selectedYear = year; yearMenu = false }, leadingIcon = { if (selectedYear == year) Icon(Icons.Default.Check, null) }) }
-                } }
-                Spacer(Modifier.width(10.dp)); TripRoundAction(Icons.Default.Add, "新建足迹") { creating = true }
-            }
-            if (stories.isNotEmpty()) TripSearchField(search, "搜索名称、城市、地点或摘要", { search = it }, Modifier.padding(horizontal = 16.dp))
+                Box {
+                    TextButton(onClick = { yearMenu = true }) {
+                        Text(selectedYear?.toString() ?: "全部年份", maxLines = 1)
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "筛选年份", modifier = Modifier.size(16.dp))
+                    }
+                    TripDropdownMenu(yearMenu, { yearMenu = false }) {
+                        DropdownMenuItem({ Text("全部年份") }, { selectedYear = null; yearMenu = false }, leadingIcon = { if (selectedYear == null) Icon(Icons.Default.Check, null) })
+                        years.forEach { year -> DropdownMenuItem({ Text("${year} 年") }, { selectedYear = year; yearMenu = false }, leadingIcon = { if (selectedYear == year) Icon(Icons.Default.Check, null) }) }
+                    }
+                }
+            })
             if (stories.isEmpty()) {
                 Column(Modifier.fillMaxSize().padding(30.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     Icon(Icons.Default.MenuBook, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.height(14.dp)); Text("足迹还空着", style = MaterialTheme.typography.headlineSmall); Spacer(Modifier.height(7.dp)); Text("新建足迹，或从旅程中收录。", color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.height(18.dp)); Button(onClick = { creating = true }) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("新建足迹") }
@@ -81,6 +85,7 @@ fun StoriesScreen(repository: TripRepository, stories: List<TravelStory>, trips:
                         item(key = "year-$year") { Row(verticalAlignment = Alignment.CenterVertically) { Text("${year} 年", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface); Spacer(Modifier.width(8.dp)); Surface(shape = RoundedCornerShape(14.dp), color = TripLake.copy(alpha = .12f)) { Text("${entries.size} 段", Modifier.padding(horizontal = 9.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) } } }
                         items(entries, key = { it.id }) { story ->
                             StoryCard(
+                                repository = repository,
                                 story = story,
                                 onOpen = { onOpen(story.id) },
                                 onShare = { sharing = story },
@@ -91,37 +96,50 @@ fun StoriesScreen(repository: TripRepository, stories: List<TravelStory>, trips:
                 }
             }
         }
+        TripFloatingCreateButton("新建足迹", Modifier.align(Alignment.BottomEnd)) { creating = true }
     }
-    if (creating) StoryEditorDialog(null, { creating = false }) { title, destination, start, end, summary -> val story = repository.createStory(title, destination, start, end, summary); creating = false; onOpen(story.id) }
-    deleting?.let { story -> ConfirmDeleteDialog("删除足迹？", "“${story.title}”以及其中的日期、记录和媒体引用都会删除。", { deleting = null }) { repository.deleteStory(story.id); deleting = null } }
+    if (creating) StoryEditorDialog(repository, null, { creating = false }) { title, destination, start, end, summary -> val story = repository.createStory(title, destination, start, end, summary); creating = false; onOpen(story.id) }
+    deleting?.let { story -> ConfirmDeleteDialog("删除足迹？", "“${story.title}”将移入回收站，24 小时内可恢复。云端项目会同步从其他设备移除。", { deleting = null }) { repository.deleteStory(story.id); deleting = null } }
     sharing?.let { story -> StoryShareDialog(story, onDismiss = { sharing = null }) }
     message?.let { AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(), onDismissRequest = { message = null }, title = { Text("提示") }, text = { Text(it) }, confirmButton = { TextButton(onClick = { message = null }) { Text("好") } }) }
 }
 
 @Composable
-private fun StoryCard(story: TravelStory, onOpen: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit) {
+private fun StoryCard(repository: TripRepository, story: TravelStory, onOpen: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface, border = androidx.compose.foundation.BorderStroke(.8.dp, TripMist.copy(alpha = .34f)), shadowElevation = 1.dp) {
+        Box {
         Row(Modifier.clickable(onClick = onOpen).padding(14.dp), verticalAlignment = Alignment.Top) {
             val preview = story.coverMedia ?: story.days.flatMap { it.entries }.flatMap { it.media }.firstOrNull()
             if (preview != null) MediaThumbnail(preview, Modifier.size(112.dp)) else Box(Modifier.size(112.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.PhotoLibrary, null, tint = Color.Gray); Text("暂无图片", style = MaterialTheme.typography.bodySmall, color = Color.Gray) } }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f).heightIn(min = 112.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(story.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(story.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreHoriz, "更多操作", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f)) }; TripDropdownMenu(menu, { menu = false }) {
+
+                DropdownMenuItem({ Text("查看足迹") }, { menu = false; onOpen() }, leadingIcon = { Icon(Icons.Default.Edit, null) }); DropdownMenuItem({ Text("分享足迹") }, { menu = false; onShare() }, leadingIcon = { Icon(Icons.Default.Share, null) }); CloudModeAction(repository, story.id, "story")
+                    HorizontalDivider()
+                    DropdownMenuItem({ Text("删除足迹", color = MaterialTheme.colorScheme.error) }, { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
+            } }
+                }
                 if (story.destination.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.PinDrop, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(5.dp)); Text(story.destination, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (story.summary.isNotBlank()) Text(story.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.weight(1f)); Text("${story.startDate.chineseDateText()} — ${story.endDate.chineseDateText()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${story.days.size} 天 · ${story.days.sumOf { it.entries.size }} 个记录", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text("${story.startDate.chineseDateText()} — ${story.endDate.chineseDateText()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${story.days.size} 天 · ${story.days.sumOf { it.entries.size }} 个记录", modifier = Modifier.padding(end = 36.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             }
-            Box { IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreHoriz, "更多操作", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f)) }; TripDropdownMenu(menu, { menu = false }) {
-                DropdownMenuItem({ Text("查看足迹") }, { menu = false; onOpen() }, leadingIcon = { Icon(Icons.Default.Edit, null) }); DropdownMenuItem({ Text("分享足迹") }, { menu = false; onShare() }, leadingIcon = { Icon(Icons.Default.Share, null) }); HorizontalDivider(); DropdownMenuItem({ Text("删除足迹", color = MaterialTheme.colorScheme.error) }, { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
-            } }
+
+        }
+        Box(Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 16.dp).size(32.dp, 24.dp), contentAlignment = Alignment.Center) {
+            CloudBadge(story.id, "story", with(androidx.compose.ui.platform.LocalDensity.current) { 20.dp.toSp() })
+        }
         }
     }
 }
 
 @Composable
-private fun StoryEditorDialog(original: TravelStory?, onDismiss: () -> Unit, save: (String, String, Long, Long, String) -> Unit) {
+private fun StoryEditorDialog(repository: TripRepository, original: TravelStory?, onDismiss: () -> Unit, save: (String, String, Long, Long, String) -> Unit) {
     var title by remember(original?.id) { mutableStateOf(original?.title.orEmpty()) }; var destination by remember(original?.id) { mutableStateOf(original?.destination.orEmpty()) }; var start by remember(original?.id) { mutableLongStateOf(original?.startDate ?: System.currentTimeMillis().startOfDay()) }; var end by remember(original?.id) { mutableLongStateOf(original?.endDate ?: System.currentTimeMillis().startOfDay()) }; var summary by remember(original?.id) { mutableStateOf(original?.summary.orEmpty()) }
     AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(), onDismissRequest = onDismiss, shape = RoundedCornerShape(28.dp), containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (original == null) "新建足迹" else "编辑足迹") }, text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) { TripFormField(title, { title = it }, "足迹名称"); TripFormField(destination, { destination = it }, "城市/目的地"); TripDateRangeField(start, end) { selectedStart, selectedEnd -> start = selectedStart; end = maxOf(selectedEnd, selectedStart) }; TripFormField(summary, { summary = it }, "摘要", minLines = 3, singleLine = false) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }, confirmButton = { Button(onClick = { save(title.trim(), destination.trim(), start, end, summary.trim()) }, enabled = title.isNotBlank()) { Text(if (original == null) "创建" else "保存") } })
 }
@@ -169,23 +187,18 @@ fun StoryDetailScreen(repository: TripRepository, storyId: String, modifier: Mod
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TripRoundAction(Icons.Default.ArrowBack, "返回", onBack)
-                Text("足迹", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 1)
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { Text(story.title, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis); Spacer(Modifier.width(5.dp)); CloudBadge(story.id, "story", MaterialTheme.typography.titleMedium.fontSize) }
                 Box {
-                    TripRoundAction(Icons.Default.MoreHoriz, "足迹操作") { actionMenu = true }
+                    IconButton(onClick = { actionMenu = true }, modifier = Modifier.size(44.dp)) {
+                        Icon(Icons.Default.MoreHoriz, "足迹操作", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(23.dp))
+                    }
                     TripDropdownMenu(actionMenu, { actionMenu = false }) {
+
                         DropdownMenuItem({ Text("编辑足迹") }, { actionMenu = false; editingStory = true }, leadingIcon = { Icon(Icons.Default.Edit, null) })
-                        DropdownMenuItem({ Text("同步最新旅程") }, {
-                            actionMenu = false
-                            val sourceId = story.sourceTripId
-                            message = when {
-                                sourceId == null -> "这份足迹不是从旅程整理而来，暂时没有可同步的来源。"
-                                data.trips.any { it.id == sourceId } && repository.archiveTrip(sourceId) != null -> "已同步最新旅程。"
-                                else -> "原旅程已不存在，无法同步。"
-                            }
-                        }, leadingIcon = { Icon(Icons.Default.Sync, null) })
                         DropdownMenuItem({ Text("分享足迹") }, { actionMenu = false; shareDayId = null; showingShare = true }, leadingIcon = { Icon(Icons.Default.Share, null) })
-                        HorizontalDivider()
-                        DropdownMenuItem({ Text("删除足迹", color = MaterialTheme.colorScheme.error) }, { actionMenu = false; deletingStory = true }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
+                        CloudModeAction(repository, story.id, "story")
+                    HorizontalDivider()
+                    DropdownMenuItem({ Text("删除足迹", color = MaterialTheme.colorScheme.error) }, { actionMenu = false; deletingStory = true }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
                     }
                 }
             }
@@ -232,7 +245,7 @@ fun StoryDetailScreen(repository: TripRepository, storyId: String, modifier: Mod
                             var dayMenu by remember(day.id) { mutableStateOf(false) }
                             Box {
                                 IconButton(onClick = { dayMenu = true }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Default.MoreHoriz, "当天更多操作", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp).border(1.dp, MaterialTheme.colorScheme.primary, androidx.compose.foundation.shape.CircleShape))
+                                    Icon(Icons.Default.MoreHoriz, "当天更多操作", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
                                 }
                                 TripDropdownMenu(dayMenu, { dayMenu = false }) {
                                     DropdownMenuItem({ Text("编辑当天") }, { dayMenu = false; editingDay = day }, leadingIcon = { Icon(Icons.Default.Edit, null) })
@@ -261,13 +274,13 @@ fun StoryDetailScreen(repository: TripRepository, storyId: String, modifier: Mod
             }
         }
     }
-    if (editingStory) StoryEditorDialog(story, { editingStory = false }) { title, destination, start, end, summary -> repository.updateStory(story.copy(title = title, destination = destination, startDate = start, endDate = end, summary = summary)); editingStory = false }
+    if (editingStory) StoryEditorDialog(repository, story, { editingStory = false }) { title, destination, start, end, summary -> repository.updateStory(story.copy(title = title, destination = destination, startDate = start, endDate = end, summary = summary)); editingStory = false }
     editing?.let { (day, entry) -> StoryEntryEditor(repository, entry, { editing = null }) { repository.saveStoryEntry(story.id, day.id, it); editing = null } }
     editingDay?.let { day -> StoryDayEditorDialog(day, { editingDay = null }) { repository.updateStoryDay(story.id, it); editingDay = null } }
     deleting?.let { (day, entry) -> ConfirmDeleteDialog("删除记录？", "“${entry.title}”将从足迹中删除。", { deleting = null }) { repository.deleteStoryEntry(story.id, day.id, entry.id); deleting = null } }
     deletingDay?.let { day -> ConfirmDeleteDialog("删除当天？", "“${day.title.ifBlank { day.date.chineseDateText() }}”以及其中的记录都会删除。", { deletingDay = null }) { repository.deleteStoryDay(story.id, day.id); deletingDay = null } }
     if (showingShare) StoryShareDialog(story, initialDayId = shareDayId, onDismiss = { showingShare = false; shareDayId = null })
-    if (deletingStory) ConfirmDeleteDialog("删除足迹？", "“${story.title}”以及其中的日期、记录和媒体引用都会删除。", { deletingStory = false }) { repository.deleteStory(story.id); deletingStory = false; onBack() }
+    if (deletingStory) ConfirmDeleteDialog("删除足迹？", "“${story.title}”将移入回收站，24 小时内可恢复。云端项目会同步从其他设备移除。", { deletingStory = false }) { repository.deleteStory(story.id); deletingStory = false; onBack() }
     message?.let { AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(), onDismissRequest = { message = null }, title = { Text("提示") }, text = { Text(it) }, confirmButton = { TextButton(onClick = { message = null }) { Text("好") } }) }
     openTarget?.let { target -> OpenPlaceChooser(target.displayName, target.address, { openTarget = null }) { platform ->
         if (platform == "高德地图") ExternalApps.openAmapTarget(context, target) else ExternalApps.openDiscovery(context, platform, target.displayName, target.address)
@@ -282,7 +295,6 @@ private fun StoryCover(story: TravelStory, onCoverAction: () -> Unit) {
         if (story.coverMedia != null) Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .12f), Color.Black.copy(alpha = .72f)))))
         Column(Modifier.align(Alignment.BottomStart).padding(24.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             if (story.destination.isNotBlank()) Text(story.destination.uppercase(), style = MaterialTheme.typography.labelMedium, color = Color(0xFFDCECE5))
-            Text(story.title, style = MaterialTheme.typography.headlineLarge, color = Color.White)
             if (story.summary.isNotBlank()) Text(story.summary, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = .88f))
             Text("${story.startDate.chineseDateText()} — ${story.endDate.chineseDateText()}", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = .72f))
         }
@@ -324,7 +336,7 @@ private fun StoryEntryCard(entry: StoryEntry, sourceItem: ItineraryItem?, onEdit
                 Text(entry.title.ifBlank { "未命名记录" }, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 if (entry.timeLabel.isNotBlank()) Text(entry.timeLabel, style = MaterialTheme.typography.bodySmall, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Box {
-                    IconButton(onClick = { menu = true }, Modifier.size(34.dp)) { Icon(Icons.Default.MoreVert, "记录操作", Modifier.size(18.dp)) }
+                    IconButton(onClick = { menu = true }, Modifier.size(34.dp)) { Icon(Icons.Default.MoreHoriz, "记录操作", Modifier.size(18.dp)) }
                     TripDropdownMenu(menu, { menu = false }) {
                         DropdownMenuItem({ Text("编辑记录") }, { menu = false; onEdit() }, leadingIcon = { Icon(Icons.Default.Edit, null) })
                         DropdownMenuItem({ Text("删除记录", color = MaterialTheme.colorScheme.error) }, { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })
@@ -481,11 +493,19 @@ private fun StoryEntryEditor(repository: TripRepository, original: StoryEntry, o
 fun TripInlineField(value: String, onChange: (String) -> Unit, placeholder: String, minLines: Int = 1) {
     androidx.compose.foundation.text.BasicTextField(
         value = value, onValueChange = onChange,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 15.dp).semantics { contentDescription = placeholder },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 15.dp).heightIn(min = 48.dp).semantics { contentDescription = placeholder },
         minLines = minLines, singleLine = minLines == 1,
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Normal),
         cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-        decorationBox = { inner -> Box { if (value.isEmpty()) Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge); inner() } },
+        decorationBox = { inner ->
+            Row(verticalAlignment = if (minLines == 1) Alignment.CenterVertically else Alignment.Top) {
+                Box(Modifier.weight(1f)) {
+                    if (value.isEmpty()) Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+                    inner()
+                }
+                TripClearTextButton(value, { onChange("") })
+            }
+        },
     )
 }
 

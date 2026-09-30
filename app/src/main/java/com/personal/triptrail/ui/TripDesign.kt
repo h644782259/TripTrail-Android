@@ -113,11 +113,17 @@ fun TripRoundAction(icon: ImageVector, description: String, onClick: () -> Unit)
 }
 
 @Composable
-fun TripSearchField(value: String, placeholder: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
+fun TripSearchField(value: String, placeholder: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier, trailingContent: (@Composable () -> Unit)? = null) {
     TextField(
         value = value, onValueChange = onValueChange, modifier = modifier.fillMaxWidth().heightIn(min = 54.dp),
         placeholder = { Text(placeholder, style = MaterialTheme.typography.bodyMedium, maxLines = 1) },
         leadingIcon = { Icon(Icons.Default.Search, null, modifier = Modifier.size(21.dp)) }, singleLine = true,
+        trailingIcon = if (value.isNotEmpty() || trailingContent != null) ({
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TripClearTextButton(value, { onValueChange("") })
+                trailingContent?.invoke()
+            }
+        }) else null,
         shape = RoundedCornerShape(26.dp),
         colors = TextFieldDefaults.colors(
             focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedContainerColor = MaterialTheme.colorScheme.surface, disabledContainerColor = MaterialTheme.colorScheme.surface,
@@ -144,11 +150,19 @@ fun TripFormField(
         Column(modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             BasicTextField(value = value, onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).semantics { contentDescription = label },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = label },
                 minLines = minLines, singleLine = singleLine, readOnly = readOnly,
                 keyboardOptions = keyboardOptions, visualTransformation = visualTransformation,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Normal),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary))
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                decorationBox = { inner ->
+                    Row(verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top) {
+                        leadingIcon?.invoke()
+                        Box(Modifier.weight(1f)) { inner() }
+                        if (!readOnly) TripClearTextButton(value, { onValueChange("") })
+                        trailingIcon?.invoke()
+                    }
+                })
         }
         return
     }
@@ -161,7 +175,13 @@ fun TripFormField(
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = label },
             minLines = minLines, singleLine = singleLine, readOnly = readOnly,
             keyboardOptions = keyboardOptions, visualTransformation = visualTransformation,
-            leadingIcon = leadingIcon, trailingIcon = trailingIcon,
+            leadingIcon = leadingIcon,
+            trailingIcon = if ((!readOnly && value.isNotEmpty()) || trailingIcon != null) ({
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!readOnly) TripClearTextButton(value, { onValueChange("") })
+                    trailingIcon?.invoke()
+                }
+            }) else null,
             textStyle = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Normal),
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
@@ -258,11 +278,18 @@ fun TripTimeField(value: Long, label: String, onValueChange: (Long) -> Unit, mod
 }
 
 @Composable
-fun TripDateRangeField(start: Long, end: Long, onChange: (Long, Long) -> Unit) {
+fun TripDateRangeField(start: Long, end: Long, compact: Boolean = false, onOpen: () -> Unit = {}, onChange: (Long, Long) -> Unit) {
     var showing by remember { mutableStateOf(false) }
     val grouped = LocalGroupedEditor.current
+    if (compact) {
+        Row(Modifier.fillMaxWidth().clickable { onOpen(); showing = true }.padding(vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CalendarMonth, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+            val format = java.time.format.DateTimeFormatter.ofPattern(if (start.localDate().year == end.localDate().year) "M月d日" else "yyyy年M月d日")
+            Text("${start.localDate().format(format)} — ${end.localDate().format(format)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+        }
+    } else
     Surface(
-        onClick = { showing = true }, modifier = Modifier.fillMaxWidth(),
+        onClick = { onOpen(); showing = true }, modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(if (grouped) 0.dp else 14.dp),
         color = if (grouped) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant,
     ) {
@@ -608,7 +635,7 @@ fun TripToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) ->
 
 @Composable
 fun TripCostField(value: String, onValueChange: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("¥", color = MaterialTheme.colorScheme.onSurfaceVariant)
         BasicTextField(
             value = value,
@@ -625,5 +652,28 @@ fun TripCostField(value: String, onValueChange: (String) -> Unit) {
                 }
             },
         )
+        TripClearTextButton(value, { onValueChange("") })
+    }
+}
+
+
+@Composable
+fun TripFloatingCreateButton(title: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    FloatingActionButton(
+        onClick = onClick,
+        modifier = modifier.padding(end = 20.dp, bottom = 16.dp).size(48.dp),
+        shape = CircleShape,
+        containerColor = TripLake,
+        contentColor = Color.White,
+    ) { Icon(Icons.Default.Add, contentDescription = title, modifier = Modifier.size(21.dp)) }
+}
+
+
+@Composable
+fun TripClearTextButton(value: String, onClear: () -> Unit, enabled: Boolean = true) {
+    if (value.isNotEmpty()) {
+        IconButton(onClick = onClear, enabled = enabled, modifier = Modifier.size(48.dp)) {
+            Icon(Icons.Default.Cancel, contentDescription = "清空内容", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }

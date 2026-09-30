@@ -112,21 +112,41 @@ private val imageDecodeSlots = Semaphore(2)
 
 /** Decode off the UI thread and bound bitmap size for camera-resolution originals. */
 @Composable
-internal fun rememberMediaBitmap(uri: String, maxDimension: Int): State<Bitmap?> {
+internal fun rememberMediaBitmap(uri: String, maxDimension: Int, isVideo: Boolean = false): State<Bitmap?> {
     val context = LocalContext.current
-    val cacheKey = "$uri:$maxDimension"
-    return produceState<Bitmap?>(thumbnailCache.get(cacheKey), uri, maxDimension) {
+    val cacheKey = "$uri:$maxDimension:$isVideo"
+    return produceState<Bitmap?>(thumbnailCache.get(cacheKey), uri, maxDimension, isVideo) {
         value = withContext(Dispatchers.IO) {
             imageDecodeSlots.withPermit {
             thumbnailCache.get(cacheKey)?.let { return@withPermit it }
             runCatching {
                 val source = Uri.parse(uri)
+                if (isVideo) {
+                    val retriever = android.media.MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(context, source)
+                        val width = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: maxDimension
+                        val height = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: maxDimension
+                        val ratio = minOf(1.0, maxDimension.toDouble() / maxOf(width, height).coerceAtLeast(1))
+                        val frame = if (android.os.Build.VERSION.SDK_INT >= 27) {
+                            retriever.getScaledFrameAtTime(-1, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, (width * ratio).toInt().coerceAtLeast(1), (height * ratio).toInt().coerceAtLeast(1))
+                        } else retriever.getFrameAtTime(-1)
+                        val thumbnail = frame?.let {
+                            if (maxOf(it.width, it.height) <= maxDimension) it else {
+                                val scale = maxDimension.toDouble() / maxOf(it.width, it.height)
+                                Bitmap.createScaledBitmap(it, (it.width * scale).toInt().coerceAtLeast(1), (it.height * scale).toInt().coerceAtLeast(1), true).also { scaled -> if (scaled !== it) it.recycle() }
+                            }
+                        }
+                        thumbnail?.also { thumbnailCache.put(cacheKey, it) }
+                    } finally { retriever.release() }
+                } else {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 context.contentResolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, bounds) }
                 val options = BitmapFactory.Options().apply { inSampleSize = 1 }
                 while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > maxDimension) options.inSampleSize *= 2
                 context.contentResolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, options) }
                     ?.also { if (maxDimension <= 512) thumbnailCache.put(cacheKey, it) }
+                }
             }.getOrNull()
             }
         }

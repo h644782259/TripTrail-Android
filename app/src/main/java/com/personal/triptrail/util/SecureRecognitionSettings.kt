@@ -32,6 +32,9 @@ class SecureRecognitionSettings(context: Context) {
     var deepSeekApiKey: String
         get() = decrypt(preferences.getString("deepseek-api-key", null).orEmpty())
         set(value) { saveKey("deepseek-api-key", value) }
+    var amapWebKey: String
+        get() = decrypt(preferences.getString("amap-web-key", null).orEmpty())
+        set(value) { saveKey("amap-web-key", value) }
     val activeApiKey: String get() = if (provider == Provider.ZHIPU) zhipuApiKey else deepSeekApiKey
 
     enum class Provider { ZHIPU, DEEPSEEK }

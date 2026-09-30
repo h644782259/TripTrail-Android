@@ -98,6 +98,57 @@ object TripFileService {
         }
     }
 
+    // One shared wire format for iOS and Android: UTC epoch milliseconds and Chinese enum raw values.
+    internal fun cloudRecords(data: AppData): List<CloudLocalRecord> {
+        fun wire(value: Any?): Any? = when (value) {
+            is JSONObject -> JSONObject().apply {
+                value.keys().forEach { key ->
+                    val raw = value.get(key)
+                    val converted = when {
+                        key in setOf("startDate", "endDate", "date", "createdAt", "startTime", "endTime", "favoriteCreatedAt") && raw is String -> Instant.parse(raw).toEpochMilli()
+                        key == "locationModeRaw" && raw == "single" -> "单地点"
+                        key == "locationModeRaw" && raw == "route" -> "起终点"
+                        key == "executionStatusRaw" && raw == "not_started" -> "未开始"
+                        key == "executionStatusRaw" && raw == "in_progress" -> "进行中"
+                        key == "executionStatusRaw" && raw == "completed" -> "已完成"
+                        else -> wire(raw)
+                    }
+                    put(key, converted)
+                }
+            }
+            is JSONArray -> JSONArray().apply { (0 until value.length()).forEach { put(wire(value.get(it))) } }
+            else -> value
+        }
+        fun vouchers(item: ItineraryItem, obj: JSONObject) {
+            obj.put("vouchers", JSONArray(item.vouchers.map { JSONObject().put("id", it.id).put("name", it.name).put("mimeType", it.mimeType).put("dataBase64", it.dataBase64) }))
+        }
+        return data.trips.map { trip ->
+            val obj = tripJson(trip, true)
+            trip.days.sortedBy { it.sortOrder }.forEachIndexed { d, day -> day.items.sortedBy { it.sortOrder }.forEachIndexed { i, item -> vouchers(item, obj.getJSONArray("days").getJSONObject(d).getJSONArray("items").getJSONObject(i)) } }
+            CloudLocalRecord(trip.id, "trip", trip.title, wire(obj) as JSONObject, trip.allItems.flatMap { it.media })
+        } + data.stories.map { story ->
+            val obj = storyJson(story, true).put("sourceTripID", story.sourceTripId ?: JSONObject.NULL).put("syncScopeRaw", story.syncScopeRaw).put("sourceSelectionIDsRaw", story.sourceSelectionIDsRaw)
+            story.days.sortedBy { it.sortOrder }.forEachIndexed { d, day -> obj.getJSONArray("days").getJSONObject(d).put("sourceDayID", day.sourceDayId ?: JSONObject.NULL).put("didMigrateInlineSummary", day.didMigrateInlineSummary) }
+            val entries = story.days.sortedBy { it.sortOrder }.flatMap { it.entries.sortedBy { it.sortOrder } }
+            entries.forEachIndexed { i, entry -> obj.getJSONArray("entries").getJSONObject(i).put("sourceItemID", entry.sourceItemId ?: JSONObject.NULL).put("didPrefillSourceMemory", entry.didPrefillSourceMemory).put("sourceMemoryPrefill", entry.sourceMemoryPrefill ?: JSONObject.NULL) }
+            CloudLocalRecord(story.id, "story", story.title, wire(obj) as JSONObject, entries.flatMap { it.media } + listOfNotNull(story.coverMedia))
+        } + data.favorites.map { item ->
+            val obj = itemJson(item, true); vouchers(item, obj)
+            CloudLocalRecord(item.id, "favorite", item.title, wire(obj) as JSONObject, item.media)
+        }
+    }
+
+    internal fun applyCloudRecord(kind: String, payload: JSONObject, repository: TripRepository) {
+        val current = repository.data.value
+        val updated = when (kind) {
+            "trip" -> parseTrip(payload).let { record -> current.copy(trips = current.trips.filterNot { it.id.equals(record.id, true) } + record) }
+            "story" -> parseStory(payload).let { record -> current.copy(stories = current.stories.filterNot { it.id.equals(record.id, true) } + record) }
+            "favorite" -> parseItem(payload).copy(isFavorite = true).let { record -> current.copy(favorites = current.favorites.filterNot { it.id.equals(record.id, true) } + record) }
+            else -> error("不支持的云端内容类型")
+        }
+        repository.replaceAll(updated)
+    }
+
     private fun tripJson(trip: Trip, includeLocalUris: Boolean) = JSONObject().apply {
         put("id", trip.id); put("title", trip.title); put("destination", trip.destination); put("licensePlate", trip.licensePlate)
         put("startDate", Instant.ofEpochMilli(trip.startDate).toString()); put("endDate", Instant.ofEpochMilli(trip.endDate).toString())
@@ -194,11 +245,13 @@ object TripFileService {
             startDate = obj.date("startDate"), endDate = obj.date("endDate"), summary = obj.optString("summary"),
             createdAt = obj.dateOrNull("createdAt") ?: System.currentTimeMillis(),
             sourceTripId = obj.optionalString("sourceTripID") ?: obj.optionalString("sourceTripId"),
+            syncScopeRaw = obj.optString("syncScopeRaw", "trip"), sourceSelectionIDsRaw = obj.optString("sourceSelectionIDsRaw"),
             coverMedia = obj.optJSONObject("coverMedia")?.let(::parseMedia), coverZoom = obj.optDouble("coverZoom", 1.0),
             coverOffsetX = obj.optDouble("coverOffsetX", 0.0), coverOffsetY = obj.optDouble("coverOffsetY", 0.0),
             days = dayObjects.map { day -> StoryDay(
                 id = day.id(), date = day.date("date"), title = day.optString("title"), note = day.optString("note"),
                 details = day.optString("details"), sortOrder = day.optInt("sortOrder"), sourceDayId = day.optionalString("sourceDayID") ?: day.optionalString("sourceDayId"),
+                didMigrateInlineSummary = day.optBoolean("didMigrateInlineSummary"),
                 entries = day.optJSONArray("entries")?.objects()?.map(::parseStoryEntry)
                     ?: entries.filter { (it.optionalString("storyDayID") ?: it.optionalString("storyDayId")) == day.id() }.map(::parseStoryEntry),
             ) }
@@ -215,6 +268,7 @@ object TripFileService {
         destinationName = obj.optString("destinationName"), destinationAddress = obj.optString("destinationAddress"),
         transport = transportMode(obj.stringFrom("transportRaw", "transport")), routeInfo = obj.optString("routeInfo"), cost = obj.optDouble("cost", 0.0), sortOrder = obj.optInt("sortOrder"),
         sourceItemId = obj.optionalString("sourceItemID") ?: obj.optionalString("sourceItemId"),
+        didPrefillSourceMemory = obj.optBoolean("didPrefillSourceMemory"), sourceMemoryPrefill = obj.optionalString("sourceMemoryPrefill"),
         media = obj.optJSONArray("media")?.objects()?.map(::parseMedia).orEmpty(),
     )
 

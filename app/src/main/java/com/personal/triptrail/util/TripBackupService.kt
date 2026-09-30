@@ -16,6 +16,49 @@ import java.util.zip.ZipOutputStream
 class TripBackupService(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
 
+    data class PreparedBackup(val file: File, val skippedCount: Int)
+
+    fun prepareBackup(data: AppData): PreparedBackup {
+        val directory = File(context.cacheDir, "triptrail-import-backup-stage-${java.util.UUID.randomUUID()}").apply { mkdirs() }
+        val output = File.createTempFile("triptrail-import-backup-export-", ".triptrailbackup", context.cacheDir)
+        try {
+            val sources = mutableMapOf<String, File>()
+            val skipped = mutableSetOf<String>()
+            data.backupMediaReferences().distinctBy { it.id }.forEach { media ->
+                val target = File(directory, media.id)
+                try {
+                    val input = openMedia(media.localUri) ?: throw java.io.FileNotFoundException()
+                    input.use { source -> target.outputStream().use { source.copyTo(it) } }
+                    require(target.length() > 0)
+                    sources[media.id] = target
+                } catch (failure: Exception) {
+                    target.delete()
+                    skipped += media.id
+                }
+            }
+            val filtered = data.copy(
+                trips = data.trips.map { trip -> trip.copy(days = trip.days.map { day -> day.copy(items = day.items.map { item -> item.copy(media = item.media.filterNot { it.id in skipped }) }) }) },
+                stories = data.stories.map { story -> story.copy(coverMedia = story.coverMedia?.takeUnless { it.id in skipped }, days = story.days.map { day -> day.copy(entries = day.entries.map { entry -> entry.copy(media = entry.media.filterNot { it.id in skipped }) }) }) },
+                favorites = data.favorites.map { it.copy(media = it.media.filterNot { media -> media.id in skipped }) }
+            )
+            output.outputStream().use { stream ->
+                ZipOutputStream(stream.buffered()).use { zip ->
+                    zip.putNextEntry(ZipEntry("triptrail-data.json"))
+                    zip.write(json.encodeToString(filtered).toByteArray())
+                    zip.closeEntry()
+                    filtered.backupMediaReferences().distinctBy { it.id }.forEach { media ->
+                        val suffix = Uri.parse(media.localUri).lastPathSegment?.substringAfterLast('.', "bin") ?: "bin"
+                        zip.putNextEntry(ZipEntry("media/${media.id}.$suffix"))
+                        sources.getValue(media.id).inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
+                }
+            }
+            return PreparedBackup(output, skipped.size)
+        } catch (failure: Throwable) { output.delete(); throw failure }
+        finally { directory.deleteRecursively() }
+    }
+
     fun write(data: AppData, output: OutputStream) {
         ZipOutputStream(output.buffered()).use { zip ->
             zip.putNextEntry(ZipEntry("triptrail-data.json"))

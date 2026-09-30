@@ -148,10 +148,6 @@ object ShareExportService {
             }
             drawText(canvas, day.heading, titleX, innerY + 16f, 17f, INK, true)
             drawText(canvas, day.date, titleX, innerY + 35f, 11f, INK_MUTED, false)
-            val count = "${day.items.size} 个片段"
-            val countWidth = measureText(count, 10f, true) + 18f
-            fillRoundRect(canvas, 326f - countWidth, innerY + 6f, 326f, innerY + 31f, 13f, TIME_BADGE, paint)
-            drawText(canvas, count, 326f - countWidth + 9f, innerY + 23f, 10f, LAKE_TEXT, true)
             innerY += 50f
 
             if (day.narrative.isNotBlank()) {

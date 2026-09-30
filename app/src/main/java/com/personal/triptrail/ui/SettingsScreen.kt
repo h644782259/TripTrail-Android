@@ -50,10 +50,22 @@ fun SettingsScreen(
     onOpenStatistics: () -> Unit,
     onOpenTrips: () -> Unit = {},
 ) {
+    var recycleBin by remember { mutableStateOf(false) }
+    if (recycleBin) RecycleBinScreen(repository) { recycleBin = false }
     val context = LocalContext.current
+    val capacityCloud = remember { com.personal.triptrail.util.CloudSyncService.get(context) }
+    var storageUsage by remember { mutableStateOf(capacityCloud.cachedStorageUsage()) }
+    var storageUsageUnavailable by remember { mutableStateOf(false) }
+    LaunchedEffect(capacityCloud) {
+        try { storageUsage = capacityCloud.storageUsage(); storageUsageUnavailable = false }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { storageUsageUnavailable = true }
+    }
     val scope = rememberCoroutineScope()
     val recognitionSettings = remember { SecureRecognitionSettings(context) }
     var smartEnabled by remember { mutableStateOf(recognitionSettings.enabled) }
+    var amapKey by remember { mutableStateOf(recognitionSettings.amapWebKey) }
+    var revealAmapKey by remember { mutableStateOf(false) }
     var apiKey by remember { mutableStateOf(recognitionSettings.apiKey) }
     var deepSeekApiKey by remember { mutableStateOf(recognitionSettings.deepSeekApiKey) }
     var provider by remember { mutableStateOf(recognitionSettings.provider) }
@@ -70,9 +82,63 @@ fun SettingsScreen(
         onDispose { shared?.discard() }
     }
     var creator by remember { mutableStateOf(false) }
-    val backupExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.triptrail.backup")) { uri ->
-        if (uri != null) runCatching { context.contentResolver.openOutputStream(uri)?.use { TripBackupService(context).write(data, it) } }.onSuccess { message = "完整备份已导出，请保存到安全位置。" }.onFailure { message = "导出失败：${it.localizedMessage}" }
+    var restoringBackup by remember { mutableStateOf(false) }
+    var backupDestination by remember { mutableStateOf(false) }
+    var restoreSource by remember { mutableStateOf(false) }
+    var uploadBackup by remember { mutableStateOf(false) }
+    var backupManager by remember { mutableStateOf(false) }
+    var preparedBackup by remember { mutableStateOf<TripBackupService.PreparedBackup?>(null) }
+    var preparingBackup by remember { mutableStateOf(false) }
+    var confirmPartialBackup by remember { mutableStateOf(false) }
+    DisposableEffect(preparedBackup) {
+        val prepared = preparedBackup
+        onDispose { prepared?.file?.delete() }
     }
+    val backupExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.triptrail.backup")) { uri ->
+        val prepared = preparedBackup
+        if (uri == null || prepared == null) { preparedBackup = null }
+        else scope.launch {
+            try {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val output = context.contentResolver.openOutputStream(uri) ?: error("无法写入备份文件")
+                    output.use { target -> prepared.file.inputStream().use { it.copyTo(target) } }
+                }
+                message = if (prepared.skippedCount == 0) "备份已导出，请保存到安全位置。" else "备份已导出，已跳过 ${prepared.skippedCount} 个无法读取的资源。"
+            } catch (failure: Exception) { message = "导出失败：${failure.localizedMessage}" }
+            finally { preparedBackup = null }
+        }
+    }
+    fun finishPreparedBackup() {
+        val prepared = preparedBackup ?: return
+        if (!uploadBackup) { backupExporter.launch("旅迹-完整备份.triptrailbackup"); return }
+        preparingBackup = true
+        scope.launch {
+            try { com.personal.triptrail.util.CloudBackupService(context).upload(prepared.file); message = "云端备份已保存为新版本。" + if (prepared.skippedCount > 0) "已跳过 ${prepared.skippedCount} 个无法读取的资源。" else "" }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { message = "上传失败：${e.localizedMessage}" }
+            finally { preparingBackup = false; preparedBackup = null }
+        }
+    }
+    fun prepareBackupExport() {
+        if (preparingBackup || preparedBackup != null) return
+        preparingBackup = true
+        scope.launch {
+            try {
+                val prepared = withContext(kotlinx.coroutines.Dispatchers.IO) { TripBackupService(context).prepareBackup(data) }
+                preparedBackup = prepared
+                if (prepared.skippedCount > 0) confirmPartialBackup = true
+                else finishPreparedBackup()
+            } catch (failure: Exception) { message = "生成备份失败：${failure.localizedMessage}" }
+            finally { if (!uploadBackup || preparedBackup == null || confirmPartialBackup) preparingBackup = false }
+        }
+    }
+    if (confirmPartialBackup) AlertDialog(
+        onDismissRequest = { confirmPartialBackup = false; preparedBackup = null },
+        title = { Text("部分资源无法读取") },
+        text = { Text("有 ${preparedBackup?.skippedCount ?: 0} 个图片或视频可能已删除或无法访问。继续将跳过这些资源，其余内容正常备份。本机记录不会修改。") },
+        confirmButton = { TextButton(onClick = { confirmPartialBackup = false; finishPreparedBackup() }) { Text("跳过并继续导出") } },
+        dismissButton = { TextButton(onClick = { confirmPartialBackup = false; preparedBackup = null }) { Text("取消") } }
+    )
     val backupImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             var prepared: PreparedImport<AppData>? = null
@@ -87,6 +153,26 @@ fun SettingsScreen(
             } catch (error: kotlinx.coroutines.CancellationException) { throw error }
             catch (error: Exception) { message = "无法读取备份：${error.localizedMessage}" }
             finally { prepared?.discard() }
+        }
+    }
+    if (backupDestination) AlertDialog(onDismissRequest = { backupDestination = false }, title = { Text("导出备份") },
+        confirmButton = { TextButton(onClick = { backupDestination = false; uploadBackup = true; prepareBackupExport() }, enabled = com.personal.triptrail.util.CloudSyncService.get(context).state.value.configured) { Text("上传云端") } },
+        dismissButton = { TextButton(onClick = { backupDestination = false; uploadBackup = false; prepareBackupExport() }) { Text("导出本地") } })
+    if (restoreSource) AlertDialog(onDismissRequest = { restoreSource = false }, title = { Text("恢复备份") },
+        confirmButton = { TextButton(onClick = { restoreSource = false; backupManager = true }, enabled = com.personal.triptrail.util.CloudSyncService.get(context).state.value.configured) { Text("从云端恢复") } },
+        dismissButton = { TextButton(onClick = { restoreSource = false; backupImporter.launch(arrayOf("*/*")) }) { Text("从本地文件导入") } })
+    if (backupManager) CloudBackupManagerScreen(onDismiss = { backupManager = false }, onExport = { backupManager = false; backupDestination = true }, onImport = { backupManager = false; backupImporter.launch(arrayOf("*/*")) }) { file, restore ->
+        backupManager = false
+        if (restore) scope.launch {
+            try {
+                val prepared = withContext(Dispatchers.IO) { file.inputStream().use { TripBackupService(context).prepareRead(it) } }
+                pendingRestore?.discard(); pendingRestore = prepared
+            } catch (e: Exception) { message = "无法读取备份：${e.localizedMessage}" }
+            finally { file.delete() }
+        } else {
+            uploadBackup = false
+            preparedBackup = TripBackupService.PreparedBackup(file, 0)
+            backupExporter.launch("旅迹-云端备份.triptrailbackup")
         }
     }
     val sharedImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -111,57 +197,83 @@ fun SettingsScreen(
         contentPadding = PaddingValues(16.dp, 18.dp, 16.dp, 112.dp),
         verticalArrangement = Arrangement.spacedBy(26.dp),
     ) {
-        item {
-            SettingsGroup("开始体验") {
-                SettingsRow(Icons.Default.AutoFixHigh, "添加示例旅程", tint = TripLakeText) {
-                    if (repository.addSampleData()) {
-                        message = "示例旅程已添加。"
-                        onOpenTrips()
-                    } else {
-                        message = "示例内容已经存在，没有重复添加。"
-                    }
-                }
-            }
-        }
+        item { CloudEntryButton(repository) }
         item { SettingsGroup("旅行概览") { SettingsRow(Icons.Default.BarChart, "旅行统计", tint = TripLakeText, textColor = Color(0xFF1C1C1E), trailing = { Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) }, action = onOpenStatistics) } }
         item { SettingsGroup("智能识别") {
-            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) { TripToggleRow("使用大模型智能识别", smartEnabled) { checked -> smartEnabled = checked; recognitionSettings.enabled = checked } }
+            Box(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) { TripToggleRow("使用大模型智能识别", smartEnabled) { checked -> smartEnabled = checked; recognitionSettings.enabled = checked } }
             if (smartEnabled) {
                 HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = TripMist.copy(alpha = .45f))
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("模型", Modifier.weight(1f))
-                    SingleChoiceSegmentedButtonRow {
-                        SegmentedButton(provider == SecureRecognitionSettings.Provider.ZHIPU, { provider = SecureRecognitionSettings.Provider.ZHIPU; recognitionSettings.provider = provider }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("智谱") }
-                        SegmentedButton(provider == SecureRecognitionSettings.Provider.DEEPSEEK, { provider = SecureRecognitionSettings.Provider.DEEPSEEK; recognitionSettings.provider = provider }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("DeepSeek") }
+                    Spacer(Modifier.width(16.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.width(216.dp)) {
+                        SegmentedButton(provider == SecureRecognitionSettings.Provider.ZHIPU, { provider = SecureRecognitionSettings.Provider.ZHIPU; recognitionSettings.provider = provider }, shape = SegmentedButtonDefaults.itemShape(0, 2), icon = {}) { Text("智谱", maxLines = 1) }
+                        SegmentedButton(provider == SecureRecognitionSettings.Provider.DEEPSEEK, { provider = SecureRecognitionSettings.Provider.DEEPSEEK; recognitionSettings.provider = provider }, shape = SegmentedButtonDefaults.itemShape(1, 2), icon = {}) { Text("DeepSeek", maxLines = 1) }
                     }
                 }
-                TripFormField(
-                    value = if (provider == SecureRecognitionSettings.Provider.ZHIPU) apiKey else deepSeekApiKey,
-                    onValueChange = { value -> if (provider == SecureRecognitionSettings.Provider.ZHIPU) { apiKey = value; recognitionSettings.apiKey = value } else { deepSeekApiKey = value; recognitionSettings.deepSeekApiKey = value } }, modifier = Modifier.padding(12.dp),
-                    label = if (provider == SecureRecognitionSettings.Provider.ZHIPU) "智谱 API Key" else "DeepSeek API Key", singleLine = true,
-                    visualTransformation = if (revealKey) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = { IconButton(onClick = { revealKey = !revealKey }) { Icon(if (revealKey) Icons.Default.VisibilityOff else Icons.Default.Visibility, if (revealKey) "隐藏" else "显示") } },
-                )
+                HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = TripMist.copy(alpha = .45f))
+                val keyValue = if (provider == SecureRecognitionSettings.Provider.ZHIPU) apiKey else deepSeekApiKey
+                val keyLabel = if (provider == SecureRecognitionSettings.Provider.ZHIPU) "智谱 API Key" else "DeepSeek API Key"
+                val updateKey: (String) -> Unit = { value ->
+                    if (provider == SecureRecognitionSettings.Provider.ZHIPU) { apiKey = value; recognitionSettings.apiKey = value }
+                    else { deepSeekApiKey = value; recognitionSettings.deepSeekApiKey = value }
+                }
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = keyValue, onValueChange = updateKey, modifier = Modifier.weight(1f), singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
+                        visualTransformation = if (revealKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        decorationBox = { inner -> Box {
+                            if (keyValue.isEmpty()) Text(keyLabel, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            inner()
+                        } },
+                    )
+                    TripClearTextButton(keyValue, { updateKey("") })
+                    IconButton(onClick = { revealKey = !revealKey }) { Icon(if (revealKey) Icons.Default.VisibilityOff else Icons.Default.Visibility, if (revealKey) "隐藏" else "显示") }
+                }
             }
         } }
-        item { SettingsGroup("备份与恢复", "含照片和视频；恢复将替换本机数据。") {
-            SettingsRow(Icons.Default.IosShare, "导出备份", tint = TripLakeText) { backupExporter.launch("旅迹-完整备份.triptrailbackup") }; GroupDivider(); SettingsRow(Icons.Outlined.FileDownload, "恢复备份", tint = TripLakeText) { backupImporter.launch(arrayOf("application/vnd.triptrail.backup", "application/json", "text/plain", "*/*")) }
+        item { SettingsGroup("高德路线", "用于查询路线地点坐标。Key 加密保存在本机，不包含在旅行备份中。") {
+            TripFormField(
+                value = amapKey,
+                onValueChange = { amapKey = it; recognitionSettings.amapWebKey = it },
+                modifier = Modifier.padding(12.dp), label = "高德 Web 服务 Key", singleLine = true,
+                visualTransformation = if (revealAmapKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = { IconButton(onClick = { revealAmapKey = !revealAmapKey }) { Icon(if (revealAmapKey) Icons.Default.VisibilityOff else Icons.Default.Visibility, "显示或隐藏 Key") } },
+            )
         } }
-        item { SettingsGroup("接收分享") { SettingsRow(Icons.Outlined.SystemUpdateAlt, "导入旅程或足迹", tint = TripLakeText) { sharedImporter.launch(arrayOf("application/vnd.triptrail.journey", "application/json", "text/plain", "*/*")) } } }
-        item { SettingsGroup("数据与隐私") { SettingsRow(Icons.Outlined.Shield, "数据存在本机", tint = TripLakeText); GroupDivider(); SettingsRow(Icons.Default.WarningAmber, "卸载 App 会清除本地数据", subtitle = "换机或卸载前请先导出完整备份。", tint = Color(0xFFB06A35)) } }
-        item { SettingsGroup("关于") { SettingsRow(Icons.Default.Person, "创作者", trailing = { Row(verticalAlignment = Alignment.CenterVertically) { Text("黄逸轩", color = Color.Gray); Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) } }) { creator = true }; GroupDivider(); SettingsValueRow("版本", "0.1.0"); GroupDivider(); SettingsValueRow("系统要求", "Android 8.0+") } }
+        item { SettingsGroup("数据管理") {
+            SettingsRow(Icons.Default.Delete, "回收站", tint = TripLakeText) { recycleBin = true }
+            SettingsRow(Icons.Default.History, "备份管理", tint = TripLakeText) { if (!preparingBackup) backupManager = true }
+            GroupDivider()
+            SettingsRow(Icons.Outlined.SystemUpdateAlt, "导入分享文件", tint = TripLakeText) { sharedImporter.launch(arrayOf("application/vnd.triptrail.journey", "application/json", "text/plain", "*/*")) }
+        } }
+        item { SettingsGroup("数据与隐私") { SettingsRow(Icons.Outlined.Shield, "本地始终保留数据副本", tint = TripLakeText); GroupDivider(); SettingsRow(Icons.Default.Cloud, "云端内容和备份为公开共享", subtitle = "云端备份独立保存历史版本。换机或卸载前，请确认完整备份已保存成功。", tint = TripLakeText) } }
+        item { SettingsGroup("关于") { SettingsRow(Icons.Default.Person, "创作者", trailing = { Row(verticalAlignment = Alignment.CenterVertically) { Text("黄逸轩", color = Color.Gray); Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) } }) { creator = true }; GroupDivider(); SettingsValueRow("版本", "0.1.0"); GroupDivider(); SettingsValueRow("系统要求", "Android 8.0+")
+            GroupDivider()
+            SettingsValueRow("云端数据库", storageUsage?.let { android.text.format.Formatter.formatFileSize(context, it.getLong("database_bytes")) } ?: if (storageUsageUnavailable) "暂不可用" else "加载中")
+            GroupDivider()
+            SettingsValueRow("云端对象存储", storageUsage?.let { android.text.format.Formatter.formatFileSize(context, it.getLong("object_bytes")) } ?: if (storageUsageUnavailable) "暂不可用" else "加载中")
+            storageUsage?.let { usage ->
+                Text("统计于 ${java.text.SimpleDateFormat("yyyy/M/d HH:mm", java.util.Locale.getDefault()).format(java.util.Date(usage.getLong("measured_at_ms")))} · 每日更新", style = MaterialTheme.typography.bodySmall, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+            } } }
     }
 
     pendingRestore?.let { prepared ->
         val restored = prepared.content
         val mediaCount = restored.backupMediaReferences().distinctBy { it.id }.size
-        fun cancel() { prepared.discard(); pendingRestore = null }
+        fun cancel() { if (!restoringBackup) { prepared.discard(); pendingRestore = null } }
         AlertDialog(modifier = androidx.compose.ui.Modifier.dismissKeyboardOnBlankTap(),
             onDismissRequest = ::cancel,
             title = { Text("恢复这份备份？") },
             text = { Text("备份包含 ${restored.trips.size} 段旅程、${restored.stories.size} 个足迹、${restored.favorites.size} 个收藏、$mediaCount 个媒体文件。恢复后将替换本机当前所有数据，此操作不可撤销。") },
             dismissButton = { TextButton(onClick = ::cancel) { Text("取消") } },
-            confirmButton = { Button(onClick = { repository.replaceAll(restored); prepared.commit(); pendingRestore = null; message = "恢复完成。" }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("替换本机数据") } },
+            confirmButton = { Button(onClick = { if (!restoringBackup) { restoringBackup = true; scope.launch {
+                try { com.personal.triptrail.util.CloudSyncService.get(context).restoreBackup(repository, prepared); pendingRestore = null; message = "恢复完成。" }
+                catch (e: Exception) { message = "恢复失败：${e.localizedMessage}" }
+                finally { restoringBackup = false }
+            } } }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("替换本机数据") } },
         )
     }
     pendingShared?.let { prepared ->
