@@ -195,27 +195,11 @@ private fun FavoriteCard(repository: TripRepository, favorite: ItineraryItem, on
                 if (cover != null) {
                     FavoriteCover(cover, Modifier.weight(1f).fillMaxWidth())
                 } else {
-                    val city = favorite.favoriteCityLabel
-                    if (city.isNotBlank() && city != "未设置城市") Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Icon(Icons.Default.LocationCity, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(city, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    favorite.locationTargets.forEach { target ->
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Top) {
-                                Icon(when (target.role) { JourneyLocationRole.ORIGIN -> Icons.Default.NearMe; JourneyLocationRole.DESTINATION -> Icons.Default.Flag; else -> Icons.Default.Place }, when (target.role) { JourneyLocationRole.ORIGIN -> "起点"; JourneyLocationRole.DESTINATION -> "终点"; else -> "地点" }, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                Text(target.displayName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
+                    FavoriteDefaultCover(favorite.category, Modifier.weight(1f).fillMaxWidth())
                 }
                 if (favorite.note.isNotBlank()) {
-                    Column(modifier = if (cover == null) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (cover == null) Text("补充说明", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .75f))
-                        Text(favorite.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = if (cover == null) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
-                    }
+                    Text(favorite.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                if (cover == null && favorite.note.isBlank()) Spacer(Modifier.weight(1f))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Surface(shape = RoundedCornerShape(14.dp), color = TripLake.copy(alpha = .11f)) {
                         Row(Modifier.padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -224,7 +208,14 @@ private fun FavoriteCard(repository: TripRepository, favorite: ItineraryItem, on
                             Text(favorite.category.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1)
                         }
                     }
-                    Spacer(Modifier.weight(1f))
+                    val city = favorite.favoriteCityLabel
+                    if (city.isNotBlank() && city != "未设置城市") {
+                        Text(city, modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
                     if (favorite.cost > 0) Text("¥${favorite.cost.toInt()}", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -388,3 +379,21 @@ private fun FavoriteSmartDialog(onDismiss: () -> Unit, onRecognized: (SmartRecog
 private fun rememberSaveableState(initial: String): MutableState<String> = androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(initial) }
 
 
+
+@Composable
+private fun FavoriteDefaultCover(category: PlaceCategory, modifier: Modifier = Modifier) {
+    val (tint, symbol) = when (category) {
+        PlaceCategory.ATTRACTION -> Color(0xFF3D8C75) to Icons.Default.Landscape
+        PlaceCategory.RESTAURANT -> Color(0xFFC76E45) to Icons.Default.Restaurant
+        PlaceCategory.HOTEL -> Color(0xFF6E75AD) to Icons.Default.Hotel
+        PlaceCategory.TRANSPORT -> Color(0xFF4785B3) to Icons.Default.Tram
+        else -> Color(0xFFAB8552) to Icons.Default.Luggage
+    }
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.clip(RoundedCornerShape(10.dp)).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(tint.copy(alpha = .18f), tint.copy(alpha = .55f)))), contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+            drawCircle(Color.White.copy(alpha = .3f), radius = size.width * .4f, center = androidx.compose.ui.geometry.Offset(size.width * .9f, size.height * .2f))
+            drawCircle(tint.copy(alpha = .14f), radius = size.width * .7f, center = androidx.compose.ui.geometry.Offset(size.width * .2f, size.height))
+        }
+        Icon(symbol, "${category.label}默认封面", modifier = Modifier.size(minOf(maxWidth * .43f, maxHeight * .45f)), tint = Color.White.copy(alpha = .95f))
+    }
+}

@@ -282,7 +282,7 @@ object ShareExportService {
         return height
     }
 
-    private fun decode(media: MediaReference?): Bitmap? = media?.localUri?.let { runCatching { Uri.parse(it).path }.getOrNull() }?.let(BitmapFactory::decodeFile)
+    private fun decode(media: MediaReference?): Bitmap? = media?.localUri?.let { runCatching { Uri.parse(it).path }.getOrNull() }?.let { OrientedImageDecoder.decodeFile(it) }
 
     private fun drawCenterCrop(canvas: Canvas, bitmap: Bitmap, dest: RectF, zoom: Float, offsetX: Float, offsetY: Float, paint: Paint) {
         val safeZoom = zoom.coerceIn(1f, 4f)

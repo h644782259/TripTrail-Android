@@ -520,7 +520,6 @@ fun PlaceCategory.icon(): ImageVector = when (this) {
     PlaceCategory.RESTAURANT -> Icons.Default.Restaurant
     PlaceCategory.HOTEL -> Icons.Default.Hotel
     PlaceCategory.TRANSPORT -> Icons.Default.DirectionsCar
-    PlaceCategory.SPECIAL -> Icons.Default.Star
     PlaceCategory.OTHER -> Icons.Default.MoreHoriz
 }
 

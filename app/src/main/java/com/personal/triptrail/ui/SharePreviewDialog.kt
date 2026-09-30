@@ -384,7 +384,7 @@ private fun SharePhotoGrid(media: List<MediaReference>) {
 @Composable
 private fun rememberMediaBitmap(media: MediaReference?): android.graphics.Bitmap? {
     val path = media?.localUri?.let { runCatching { Uri.parse(it).path }.getOrNull() }
-    return remember(path) { path?.let(BitmapFactory::decodeFile) }
+    return remember(path) { path?.let { com.personal.triptrail.util.OrientedImageDecoder.decodeFile(it) } }
 }
 
 private fun Trip.sharePreviewData(selectedIds: Set<String>): SharePreviewData {

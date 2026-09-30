@@ -198,7 +198,6 @@ fun TripsScreen(repository: TripRepository, trips: List<Trip>, modifier: Modifie
                             featured = section == TripHomeSection.CURRENT && trip.id == displayed.first().id,
                             onOpen = { onOpen(trip.id) },
                             onEdit = { editing = trip },
-                            onArchive = { repository.archiveTrip(trip.id); message = "已整理成足迹。" },
                             onShare = { sharing = trip },
                             onSmartImport = { smartCreation = false; smartTextTrip = trip },
                             onRoute = { routeTrip = trip },
@@ -336,7 +335,7 @@ private fun JourneyEmptyHero() {
 @Composable
 private fun TripCardContainer(
     repository: TripRepository,
-    trip: Trip, featured: Boolean, onOpen: () -> Unit, onEdit: () -> Unit, onArchive: () -> Unit,
+    trip: Trip, featured: Boolean, onOpen: () -> Unit, onEdit: () -> Unit,
     onShare: () -> Unit, onSmartImport: () -> Unit, onRoute: () -> Unit, onDelete: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -364,7 +363,6 @@ private fun TripCardContainer(
                     DropdownMenuItem({ Text("编辑旅程") }, { menu = false; onEdit() }, leadingIcon = { Icon(Icons.Default.Edit, null) })
                     DropdownMenuItem({ Text("分享旅程") }, { menu = false; onShare() }, leadingIcon = { Icon(Icons.Default.Share, null) })
                     DropdownMenuItem({ Text("规划全行程路线") }, { menu = false; onRoute() }, leadingIcon = { Icon(Icons.Default.Route, null) })
-                    DropdownMenuItem({ Text("整理成足迹") }, { menu = false; onArchive() }, leadingIcon = { Icon(Icons.Default.MenuBook, null) })
                     CloudModeAction(repository, trip.id, "trip")
                     HorizontalDivider()
                     DropdownMenuItem({ Text("删除旅程", color = MaterialTheme.colorScheme.error) }, { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) })

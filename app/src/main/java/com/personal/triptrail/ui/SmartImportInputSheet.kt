@@ -94,9 +94,7 @@ internal fun SmartImportInputSheet(
                                                 } else {
                                                     val bitmap by produceState<android.graphics.Bitmap?>(null, uri) {
                                                         value = withContext(Dispatchers.IO) {
-                                                            runCatching { context.contentResolver.openInputStream(uri)?.use { stream ->
-                                                                android.graphics.BitmapFactory.decodeStream(stream, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 })
-                                                            } }.getOrNull()
+                                                            com.personal.triptrail.util.OrientedImageDecoder.decode(context, uri, 1024)
                                                         }
                                                     }
                                                     bitmap?.let { Image(it.asImageBitmap(), "截图", Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)), contentScale = androidx.compose.ui.layout.ContentScale.Crop) }

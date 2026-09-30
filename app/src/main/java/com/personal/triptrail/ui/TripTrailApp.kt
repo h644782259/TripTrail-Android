@@ -11,6 +11,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.personal.triptrail.data.TravelStory
 import com.personal.triptrail.data.Trip
 import com.personal.triptrail.data.TripRepository
@@ -52,12 +55,36 @@ fun TripTrailApp(repository: TripRepository, initialSharedUri: Uri?, incomingVer
     LaunchedEffect(repository) {
         while (true) {
             repository.refreshAutomaticStatuses()
-            cloud.archiveFinishedTrips(repository)
             delay(30_000)
         }
     }
 
-    LaunchedEffect(data.trips.map { it.id to it.endDate }) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var calendarChange by remember { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) { calendarChange++ }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_DATE_CHANGED)
+            addAction(android.content.Intent.ACTION_TIME_CHANGED)
+            addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        androidx.core.content.ContextCompat.registerReceiver(context, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+    LaunchedEffect(repository, lifecycleOwner, calendarChange) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                cloud.archiveFinishedTrips(repository)
+                val now = java.time.ZonedDateTime.now()
+                val midnight = now.toLocalDate().plusDays(1).atStartOfDay(now.zone)
+                delay(java.time.Duration.between(now, midnight).toMillis().coerceAtLeast(1L))
+            }
+        }
+    }
+
+    LaunchedEffect(data.trips.map { Triple(it.id, it.startDate, it.endDate) }) {
         cloud.archiveFinishedTrips(repository)
     }
 

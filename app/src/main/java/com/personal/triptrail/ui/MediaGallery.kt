@@ -140,11 +140,7 @@ internal fun rememberMediaBitmap(uri: String, maxDimension: Int, isVideo: Boolea
                         thumbnail?.also { thumbnailCache.put(cacheKey, it) }
                     } finally { retriever.release() }
                 } else {
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                context.contentResolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-                val options = BitmapFactory.Options().apply { inSampleSize = 1 }
-                while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > maxDimension) options.inSampleSize *= 2
-                context.contentResolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, options) }
+                com.personal.triptrail.util.OrientedImageDecoder.decode(context, source, maxDimension)
                     ?.also { if (maxDimension <= 512) thumbnailCache.put(cacheKey, it) }
                 }
             }.getOrNull()

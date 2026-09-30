@@ -7,15 +7,24 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 
-@Serializable
+@Serializable(with = PlaceCategorySerializer::class)
 enum class PlaceCategory(val label: String) {
-    ATTRACTION("景点"), RESTAURANT("餐饮"), HOTEL("住宿"), TRANSPORT("交通"), SPECIAL("特殊位置"), OTHER("其他");
+    ATTRACTION("景点"), RESTAURANT("餐饮"), HOTEL("住宿"), TRANSPORT("交通"), OTHER("其他");
 
     companion object {
         fun fromLabel(value: String) = entries.firstOrNull { it.label == value } ?: when (value) {
-            "购物", "待办" -> OTHER
+            "购物", "待办", "特殊位置", "SPECIAL", "special" -> OTHER
             else -> ATTRACTION
         }
+    }
+}
+
+object PlaceCategorySerializer : kotlinx.serialization.KSerializer<PlaceCategory> {
+    override val descriptor = kotlinx.serialization.descriptors.PrimitiveSerialDescriptor("PlaceCategory", kotlinx.serialization.descriptors.PrimitiveKind.STRING)
+    override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: PlaceCategory) = encoder.encodeString(value.name)
+    override fun deserialize(decoder: kotlinx.serialization.encoding.Decoder): PlaceCategory {
+        val raw = decoder.decodeString()
+        return PlaceCategory.entries.firstOrNull { it.name == raw } ?: PlaceCategory.fromLabel(raw)
     }
 }
 
